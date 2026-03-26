@@ -1,0 +1,53 @@
+[project]
+name = "metararepi"
+version = "0.1.0"
+description = "MetaRareEpi: Federated rare-variant epistasis meta-analysis via implicit kernel methods"
+readme = "README.md"
+requires-python = ">=3.14"
+license = { text = "MIT" }
+authors = [{ name = "MetaRareEpi Team" }]
+keywords = ["epistasis", "rare-variants", "meta-analysis", "GWAS", "kernel-methods"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Programming Language :: Python :: 3.14",
+]
+
+dependencies = [
+    "jax>=0.5",
+    "jaxlib>=0.5",
+    "matplotlib>=3.10.8",
+    "numpy>=2.2",
+    "scipy>=1.15",
+    "zarr>=3.0",
+]
+
+[project.optional-dependencies]
+cuda = ["jax[cuda12]>=0.5"]
+# federated = ["ray>=2.40"]  # BLOCKED: Ray has no cp314 wheels yet
+dev = [
+    "pytest>=9.0",
+    "pytest-cov>=6.0",
+    "ruff>=0.9",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/metararepi"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-v --tb=short"
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]

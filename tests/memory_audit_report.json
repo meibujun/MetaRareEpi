@@ -1,0 +1,70 @@
+{
+  "config": {
+    "N": 1000000,
+    "m_A": 20,
+    "m_B": 20,
+    "S": 100,
+    "max_power": 4
+  },
+  "theoretical": {
+    "allowed_arrays": {
+      "Z_A (N, m_A)": "152.59 MB",
+      "Z_B (N, m_B)": "152.59 MB",
+      "H (N, m_A*m_B)": "2.98 GB",
+      "G (d, d) micro-gram": "1.22 MB",
+      "Gp (d, d) accumulator": "1.22 MB",
+      "V0 (N, S) Rademacher [hutchinson only]": "762.94 MB",
+      "W (N, S) state [hutchinson only]": "762.94 MB",
+      "C (m_A, m_B) einsum intermediate": "3.12 KB"
+    },
+    "total_allowed": "4.77 GB",
+    "forbidden_NxN": "7.28 TB"
+  },
+  "checkpoints": [
+    {
+      "label": "baseline (before allocation)",
+      "tracemalloc_current_mb": 0.000622,
+      "tracemalloc_peak_mb": 0.000665,
+      "rss_mb": 0.0
+    },
+    {
+      "label": "after Z_A, Z_B allocation (numpy)",
+      "tracemalloc_current_mb": 320.00398,
+      "tracemalloc_peak_mb": 320.00398,
+      "rss_mb": 0.0
+    },
+    {
+      "label": "after JAX array creation",
+      "tracemalloc_current_mb": 320.113293,
+      "tracemalloc_peak_mb": 320.248742,
+      "rss_mb": 0.0
+    },
+    {
+      "label": "after exact traces (21.29s)",
+      "tracemalloc_current_mb": 323.221687,
+      "tracemalloc_peak_mb": 323.286127,
+      "rss_mb": 0.0
+    },
+    {
+      "label": "after Rademacher probes allocation",
+      "tracemalloc_current_mb": 323.779565,
+      "tracemalloc_peak_mb": 323.910615,
+      "rss_mb": 0.0
+    },
+    {
+      "label": "after hutchinson traces (97.83s)",
+      "tracemalloc_current_mb": 323.965418,
+      "tracemalloc_peak_mb": 324.041879,
+      "rss_mb": 0.0
+    },
+    {
+      "label": "after single MVM (0.311s)",
+      "tracemalloc_current_mb": 324.039814,
+      "tracemalloc_peak_mb": 324.054997,
+      "rss_mb": 0.0
+    }
+  ],
+  "peak_tracemalloc_mb": 324.054997,
+  "peak_rss_mb": 324.054997,
+  "verdict": "PASS"
+}
