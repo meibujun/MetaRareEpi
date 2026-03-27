@@ -105,7 +105,7 @@ class FederatedNode:
         block_B_idx: np.ndarray,
         *,
         max_power: int = 4,
-        method: str = "exact",
+        method: str = "hutchpp",
     ) -> dict:
         """
         Compute spectral cumulants κ₁–κ₄ of the local epistatic kernel.

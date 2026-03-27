@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-viz_federated.py â€” Figure 3: Federated Validation Plots
+viz_federated.py â€?Figure 3: Federated Validation Plots
 
 Nature Genetics 2026 Â· MetaRareEpi Framework
 
@@ -74,7 +74,7 @@ def generate_figure3(output_path: str = "viz/output/Figure_3_Federated.pdf"):
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(str(out), format='pdf', bbox_inches='tight', transparent=True)
-    print(f"âœ“ Figure 3 saved to {output_path}")
+    print(f"âœ?Figure 3 saved to {output_path}")
 
 
 if __name__ == "__main__":

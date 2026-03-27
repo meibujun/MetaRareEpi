@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-viz_network.py â€” Figure 4: Epistatic Network Visualisation
+viz_network.py â€?Figure 4: Epistatic Network Visualisation
 
 Nature Genetics 2026 Â· MetaRareEpi Framework
 
@@ -117,7 +117,7 @@ def generate_figure4(output_path: str = "viz/output/Figure_4_Network.pdf"):
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(str(out), format='pdf', bbox_inches='tight', transparent=True)
-    print(f"âœ“ Figure 4 saved to {output_path}")
+    print(f"âœ?Figure 4 saved to {output_path}")
 
 
 if __name__ == "__main__":

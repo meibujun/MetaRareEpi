@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-viz_3d_synergy.py â€” 3D Synergistic Response Surface
+viz_3d_synergy.py â€?3D Synergistic Response Surface
 
 Nature Genetics 2026 Â· MetaRareEpi Framework
 
@@ -65,7 +65,7 @@ def plot_3d_synergy_surface_nature(output_path: str):
     out_file = Path(output_path)
     out_file.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(str(out_file), format='pdf', bbox_inches='tight', transparent=True)
-    print(f"âœ“ Nature 3D Synergy Surface saved to {output_path}")
+    print(f"âœ?Nature 3D Synergy Surface saved to {output_path}")
 
 if __name__ == "__main__":
     out = "viz/output/Figure_4B_3D_Surface_Nature.pdf"

@@ -1,7 +1,7 @@
 #!/usr/bin/env Rscript
 # ==============================================================================
 # VISUALIZATION 1: Extreme Tail Q-Q Calibration
-# Blueprint: Nature Genetics (R - ggplot2 + ggrastr)
+# Blueprint: R2 (R - ggplot2 + ggrastr)
 #
 # Rasterizes overplotted scatter points to keep PDF < 2MB while retaining 
 # extreme detail, leaving text and axes as pure vectors. Uses ggsci NPG palette.
@@ -65,4 +65,4 @@ dir.create(dirname(output_path), recursive = TRUE, showWarnings = FALSE)
 # Width 89mm is standard single-column width for Nature Portfolio journals
 ggsave(output_path, p, width = 89, height = 89, units = "mm", device=cairo_pdf)
 
-cat(sprintf("âœ“ Nature Genetics Q-Q plot saved: %s\n", output_path))
+cat(sprintf("âœ?MetaRareEpi Q-Q plot saved: %s\n", output_path))

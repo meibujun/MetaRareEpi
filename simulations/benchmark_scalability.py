@@ -1,12 +1,12 @@
 #!/usr/bin/env python
 """
-benchmark_scalability.py â€” Computational Scalability Benchmarking
+benchmark_scalability.py â€?Computational Scalability Benchmarking
 
-Reproduces Figure 1 and Table 1 from the Nature Genetics manuscript.
+Reproduces Figure 1 and Table 1 from the R2 manuscript.
 
 Benchmarks:
-    1. Standard-EVD (O(NÂ³)) â€” explicit dense kernel + eigendecomposition
-    2. MetaRareEpi Fast-MVM (O(N)) â€” implicit micro-gram traces
+    1. Standard-EVD (O(NÂ³)) â€?explicit dense kernel + eigendecomposition
+    2. MetaRareEpi Fast-MVM (O(N)) â€?implicit micro-gram traces
 
 Outputs structured CSV data for Figure 1 generation.
 """
@@ -110,13 +110,13 @@ def main():
         log.info("Standard-EVD: N=%d", N)
         r = benchmark_standard_evd(N, args.m_A, args.m_B, args.seed)
         results.append(r)
-        log.info("  â†’ %.2f s, %.2f GB, success=%s", r["runtime_s"], r["peak_memory_gb"], r["success"])
+        log.info("  â†?%.2f s, %.2f GB, success=%s", r["runtime_s"], r["peak_memory_gb"], r["success"])
 
     for N in N_range:
         log.info("MetaRareEpi: N=%d", N)
         r = benchmark_metararepi(N, args.m_A, args.m_B, args.seed)
         results.append(r)
-        log.info("  â†’ %.2f s, %.2f GB", r["runtime_s"], r["peak_memory_gb"])
+        log.info("  â†?%.2f s, %.2f GB", r["runtime_s"], r["peak_memory_gb"])
 
     # Write CSV
     Path(args.output).parent.mkdir(parents=True, exist_ok=True)

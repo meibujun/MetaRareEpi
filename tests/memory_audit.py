@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 """
-memory_audit.py — N=1,000,000 memory profiler for MetaRareEpi.
+memory_audit.py �?N=1,000,000 memory profiler for MetaRareEpi.
 
-Proves to Nature Genetics reviewers that peak RAM stays under 5 GB at
+Proves to reviewers that peak RAM stays under 5 GB at
 biobank scale (N=1M, m_A=m_B=20) by tracking Python heap + JAX device
 memory throughout the cumulant extraction pipeline.
 
@@ -38,10 +38,8 @@ from engine_jax import (
 )
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# Configuration
-# ═══════════════════════════════════════════════════════════════════════════
-
+# ══════════════════════════════════════════════════════════════════════════�?# Configuration
+# ══════════════════════════════════════════════════════════════════════════�?
 N = 1_000_000       # individuals (biobank scale)
 M_A = 20            # SNPs in locus block A
 M_B = 20            # SNPs in locus block B
@@ -104,7 +102,7 @@ def run_memory_audit() -> dict:
     report["theoretical"]["forbidden_NxN"] = sizeof_fmt(list(forbidden.values())[0])
 
     print("=" * 72)
-    print("  MetaRareEpi Memory Audit — N = {:,}".format(N))
+    print("  MetaRareEpi Memory Audit �?N = {:,}".format(N))
     print("=" * 72)
     print()
     print("THEORETICAL MEMORY BUDGET (float64)")

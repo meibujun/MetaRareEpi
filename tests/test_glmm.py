@@ -1,10 +1,11 @@
 """
-test_glmm.py — Tests for metararepi.glmm module.
+test_glmm.py — Tests for metararepi.glmm module (R2 API).
 
-Validates GLMM base model operations:
-- P₀ projection properties (idempotency, symmetry, null-space)
+Validates:
+- GLMM null model fitting (continuous + binary)
 - AI-REML variance component estimation
-- Whitened residual computation
+- Generalized FWL projection (Proposition 1)
+- P0 projection properties
 """
 
 from __future__ import annotations
@@ -16,17 +17,13 @@ import numpy as np
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-from metararepi.glmm import (  # noqa: E402
-    estimate_grm,
-    compute_V,
-    compute_P0,
-    compute_whitened_residual,
-    estimate_variance_components,
-    null_model_pipeline,
+from metararepi.glmm import (
+    fit_null_model,
+    build_fwl_projection,
+    verify_fwl_properties,
 )
 
 N = 200
-M = 50
 SEED = 42
 
 
@@ -34,116 +31,140 @@ SEED = 42
 def synthetic_data():
     """Generate synthetic data for GLMM tests."""
     rng = np.random.default_rng(SEED)
-    G = rng.integers(0, 3, size=(N, M)).astype(np.float64)
     X = np.column_stack([np.ones(N), rng.standard_normal(N)])
     y = X @ np.array([1.0, 0.5]) + rng.standard_normal(N)
-    return {"G": G, "X": X, "y": y}
+    # Simple GRM (identity + small noise for positive definiteness)
+    GRM = np.eye(N) + 0.02 * rng.standard_normal((N, N))
+    GRM = (GRM + GRM.T) / 2
+    np.fill_diagonal(GRM, 1.0)
+    return {"X": X, "y": y, "GRM": GRM}
 
 
-class TestGRM:
+class TestContinuousNullModel:
 
-    def test_grm_symmetric(self, synthetic_data):
-        Phi = estimate_grm(synthetic_data["G"])
-        np.testing.assert_allclose(Phi, Phi.T, atol=1e-12)
-
-    def test_grm_psd(self, synthetic_data):
-        Phi = estimate_grm(synthetic_data["G"])
-        eigenvalues = np.linalg.eigvalsh(Phi)
-        assert np.all(eigenvalues > -1e-8)
-
-    def test_grm_shape(self, synthetic_data):
-        Phi = estimate_grm(synthetic_data["G"])
-        assert Phi.shape == (N, N)
-
-
-class TestProjectionP0:
-
-    def test_p0_symmetric(self, synthetic_data):
-        """P₀ must be symmetric."""
-        Phi = estimate_grm(synthetic_data["G"])
-        V = compute_V(Phi, 0.3, 0.7)
-        P0 = compute_P0(V, synthetic_data["X"])
-        np.testing.assert_allclose(P0, P0.T, atol=1e-10)
-
-    def test_p0_annihilates_X(self, synthetic_data):
-        """P₀X = 0 (null space property)."""
-        Phi = estimate_grm(synthetic_data["G"])
-        V = compute_V(Phi, 0.3, 0.7)
-        P0 = compute_P0(V, synthetic_data["X"])
-        result = P0 @ synthetic_data["X"]
-        np.testing.assert_allclose(result, 0.0, atol=1e-8)
-
-    def test_p0_idempotent(self, synthetic_data):
-        """P₀² = P₀ (in the V-metric sense: P₀VP₀ = P₀)."""
-        Phi = estimate_grm(synthetic_data["G"])
-        V = compute_V(Phi, 0.3, 0.7)
-        P0 = compute_P0(V, synthetic_data["X"])
-        P0VP0 = P0 @ V @ P0
-        np.testing.assert_allclose(P0VP0, P0, atol=1e-6)
-
-
-class TestVarianceComponents:
-
-    def test_ai_reml_converges(self, synthetic_data):
-        """AI-REML must converge within max_iter."""
-        Phi = estimate_grm(synthetic_data["G"])
-        vc = estimate_variance_components(
-            synthetic_data["y"], synthetic_data["X"], Phi
+    def test_fit_converges(self, synthetic_data):
+        """AI-REML should converge."""
+        result = fit_null_model(
+            synthetic_data["y"], synthetic_data["X"],
+            synthetic_data["GRM"], trait_type="continuous"
         )
-        assert vc["converged"] or vc["n_iter"] <= 50
-        assert vc["tau2"] > 0
-        assert vc["sigma2_e"] > 0
-        assert 0.0 <= vc["h2"] <= 1.0
+        assert result["converged"] or result["n_iter"] <= 100
 
-    def test_h2_reasonable(self, synthetic_data):
-        """h² should be between 0 and 1."""
-        Phi = estimate_grm(synthetic_data["G"])
-        vc = estimate_variance_components(
-            synthetic_data["y"], synthetic_data["X"], Phi
+    def test_variance_components_positive(self, synthetic_data):
+        """Estimated variance components should be positive."""
+        result = fit_null_model(
+            synthetic_data["y"], synthetic_data["X"],
+            synthetic_data["GRM"], trait_type="continuous"
         )
-        assert 0.0 <= vc["h2"] <= 1.0
+        assert result["tau2"] > 0
+        assert result["sigma2"] > 0
 
-
-class TestWhitenedResidual:
-
-    def test_residual_shape(self, synthetic_data):
-        """Whitened residual must have shape (N,)."""
-        Phi = estimate_grm(synthetic_data["G"])
-        V = compute_V(Phi, 0.3, 0.7)
-        P0 = compute_P0(V, synthetic_data["X"])
-        y_tilde = compute_whitened_residual(
-            synthetic_data["y"], synthetic_data["X"], P0
+    def test_P0_annihilates_X(self, synthetic_data):
+        """P0 @ X should be approximately zero."""
+        result = fit_null_model(
+            synthetic_data["y"], synthetic_data["X"],
+            synthetic_data["GRM"], trait_type="continuous"
         )
-        assert y_tilde.shape == (N,)
+        P0X = result["P0_matrix"] @ synthetic_data["X"]
+        assert np.max(np.abs(P0X)) < 1e-6
 
-    def test_residual_orthogonal_to_X(self, synthetic_data):
-        """X^T ỹ ≈ 0 (residual is orthogonal to fixed effects in V metric)."""
-        Phi = estimate_grm(synthetic_data["G"])
-        V = compute_V(Phi, 0.3, 0.7)
-        P0 = compute_P0(V, synthetic_data["X"])
-        y_tilde = compute_whitened_residual(
-            synthetic_data["y"], synthetic_data["X"], P0
+    def test_P0_symmetric(self, synthetic_data):
+        """P0 should be symmetric."""
+        result = fit_null_model(
+            synthetic_data["y"], synthetic_data["X"],
+            synthetic_data["GRM"], trait_type="continuous"
         )
-        # P₀X = 0 ⟹ X^T P₀ y = 0
-        projection = synthetic_data["X"].T @ y_tilde
-        np.testing.assert_allclose(projection, 0.0, atol=1e-6)
+        P0 = result["P0_matrix"]
+        assert np.max(np.abs(P0 - P0.T)) < 1e-8
 
-
-class TestNullModelPipeline:
-
-    def test_pipeline_returns_dict(self, synthetic_data):
-        result = null_model_pipeline(
-            synthetic_data["y"],
-            X=synthetic_data["X"],
-            G_common=synthetic_data["G"],
+    def test_P0_V_metric_idempotent(self, synthetic_data):
+        """P0 V P0 should equal P0."""
+        result = fit_null_model(
+            synthetic_data["y"], synthetic_data["X"],
+            synthetic_data["GRM"], trait_type="continuous"
         )
-        assert "P0" in result
-        assert "y_tilde" in result
-        assert "V" in result
-        assert "variance_components" in result
+        P0 = result["P0_matrix"]
+        V = result["sigma2"] * np.eye(N) + result["tau2"] * synthetic_data["GRM"]
+        PVP = P0 @ V @ P0
+        assert np.max(np.abs(PVP - P0)) < 1e-5
 
-    def test_pipeline_with_defaults(self, synthetic_data):
-        """Pipeline with default intercept-only model."""
-        result = null_model_pipeline(synthetic_data["y"])
-        assert result["P0"].shape == (N, N)
-        assert result["y_tilde"].shape == (N,)
+    def test_y_adj_shape(self, synthetic_data):
+        """Adjusted residual should have correct shape."""
+        result = fit_null_model(
+            synthetic_data["y"], synthetic_data["X"],
+            synthetic_data["GRM"], trait_type="continuous"
+        )
+        assert result["y_adj"].shape == (N,)
+
+
+class TestBinaryNullModel:
+
+    @pytest.fixture(scope="class")
+    def binary_data(self, synthetic_data):
+        rng = np.random.default_rng(SEED + 1)
+        mu = 1.0 / (1.0 + np.exp(-rng.normal(0, 0.3, N)))
+        y = rng.binomial(1, mu).astype(np.float64)
+        return {"X": synthetic_data["X"], "y": y, "GRM": synthetic_data["GRM"]}
+
+    def test_binary_fit_converges(self, binary_data):
+        """IRLS + AI-REML should converge for binary traits."""
+        result = fit_null_model(
+            binary_data["y"], binary_data["X"],
+            binary_data["GRM"], trait_type="binary"
+        )
+        assert result["converged"] or result["n_iter"] <= 100
+
+    def test_binary_W_diag_positive(self, binary_data):
+        """IRLS working weights should be positive."""
+        result = fit_null_model(
+            binary_data["y"], binary_data["X"],
+            binary_data["GRM"], trait_type="binary"
+        )
+        assert np.all(result["W_diag"] > 0)
+
+    def test_binary_mu_in_range(self, binary_data):
+        """Fitted means should be in (0, 1)."""
+        result = fit_null_model(
+            binary_data["y"], binary_data["X"],
+            binary_data["GRM"], trait_type="binary"
+        )
+        assert np.all(result["mu_hat"] > 0)
+        assert np.all(result["mu_hat"] < 1)
+
+
+class TestFWLProjection:
+
+    def test_fwl_annihilation(self, synthetic_data):
+        """P_adj @ Z_main should be approximately zero."""
+        result = fit_null_model(
+            synthetic_data["y"], synthetic_data["X"],
+            synthetic_data["GRM"], trait_type="continuous"
+        )
+        rng = np.random.default_rng(SEED)
+        Z_main = rng.standard_normal((N, 10))
+        P_adj = build_fwl_projection(result["P0_matrix"], Z_main)
+        assert np.max(np.abs(P_adj @ Z_main)) < 1e-6
+
+    def test_fwl_symmetry(self, synthetic_data):
+        """P_adj should be symmetric."""
+        result = fit_null_model(
+            synthetic_data["y"], synthetic_data["X"],
+            synthetic_data["GRM"], trait_type="continuous"
+        )
+        rng = np.random.default_rng(SEED)
+        Z_main = rng.standard_normal((N, 10))
+        P_adj = build_fwl_projection(result["P0_matrix"], Z_main)
+        assert np.max(np.abs(P_adj - P_adj.T)) < 1e-8
+
+    def test_verify_fwl_properties(self, synthetic_data):
+        """verify_fwl_properties should return correct diagnostics."""
+        result = fit_null_model(
+            synthetic_data["y"], synthetic_data["X"],
+            synthetic_data["GRM"], trait_type="continuous"
+        )
+        rng = np.random.default_rng(SEED)
+        Z_main = rng.standard_normal((N, 10))
+        P_adj = build_fwl_projection(result["P0_matrix"], Z_main)
+        props = verify_fwl_properties(P_adj, Z_main)
+        assert props["annihilation_error"] < 1e-6
+        assert props["symmetry_error"] < 1e-8

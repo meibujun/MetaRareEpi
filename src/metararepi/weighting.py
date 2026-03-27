@@ -1,7 +1,7 @@
 """
 weighting.py — Deep Prior-Elicited Variant Weighting.
 
-Nature Genetics 2026 · MetaRareEpi Framework (Section 2.2)
+MetaRareEpi R2 Framework (Section 2.2)
 
 Rather than treating all rare variants equally using arbitrary MAF
 thresholds, this module deploys a modular annotation scoring system

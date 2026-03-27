@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 """
-benchmark_type1_error.py — Type I Error Calibration Benchmark
+benchmark_type1_error.py �?Type I Error Calibration Benchmark
 
-Reproduces Figure 2 and Table 2 from the Nature Genetics manuscript.
+Reproduces Figure 2 and Table 2 from the R2 manuscript.
 
 Evaluates empirical Type I error rates under the null hypothesis (H₀: τ²_epi = 0)
 with injected main effects across multiple significance thresholds.

@@ -2,7 +2,7 @@
 """
 viz_scalability.py — Figure 1: Computational Scalability Plots
 
-Nature Genetics 2026 · MetaRareEpi Framework
+MetaRareEpi R2 Framework
 
 Generates:
     Panel A: Log-log runtime comparison (Standard-EVD vs MetaRareEpi)

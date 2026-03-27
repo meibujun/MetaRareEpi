@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-viz_calibration.py â€” Figure 2: Type I Error Calibration Q-Q Plot
+viz_calibration.py â€?Figure 2: Type I Error Calibration Q-Q Plot
 
 Nature Genetics 2026 Â· MetaRareEpi Framework
 
@@ -76,7 +76,7 @@ def generate_figure2(output_path: str = "viz/output/Figure_2_Calibration.pdf"):
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(str(out), format='pdf', bbox_inches='tight', transparent=True)
-    print(f"âœ“ Figure 2 saved to {output_path}")
+    print(f"âœ?Figure 2 saved to {output_path}")
 
 
 if __name__ == "__main__":

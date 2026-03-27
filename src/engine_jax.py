@@ -156,13 +156,13 @@ def dual_space_mvm_factory(Z_KR, P_adj_apply=None):
     """
     Create an implicit MVM function for the dual Gram matrix.
 
-    For full P_adj (not just diagonal), P_adj_apply should be a function
-    that computes P_adj @ v for a vector v.
+    Supports BOTH single-vector q (d,) and batched Q (d, S) inputs,
+    enabling full GPU parallelism through JAX XLA.
 
     Parameters
     ----------
     Z_KR       : (N, d) Khatri-Rao product.
-    P_adj_apply : callable v -> P_adj @ v (optional).
+    P_adj_apply : callable v -> P_adj @ v (optional, supports batched).
 
     Returns
     -------
@@ -170,10 +170,10 @@ def dual_space_mvm_factory(Z_KR, P_adj_apply=None):
     """
     @jax.jit
     def dual_mvm(q):
-        """G_dual @ q = Z_KR^T (P_adj (Z_KR @ q))"""
+        """G_dual @ q = Z_KR^T (P_adj (Z_KR @ q))  — fully vectorized."""
         u = Z_KR @ q                      # (N,) or (N, S)
         if P_adj_apply is not None:
-            u = P_adj_apply(u)             # P_adj @ u
+            u = P_adj_apply(u)             # P_adj @ u (batched)
         return Z_KR.T @ u                 # (d,) or (d, S)
     return dual_mvm
 
@@ -248,9 +248,12 @@ def nystrom_approximation(mvm_fn, d, rank, key):
     """
     Randomized Nyström low-rank approximation of a symmetric PSD matrix.
 
+    GPU-OPTIMIZED: Uses fully batched matmul instead of column-by-column
+    Python loops. Two calls to mvm_fn(matrix) replace 2*rank individual calls.
+
     Parameters
     ----------
-    mvm_fn : callable q -> A @ q, for SPSD matrix A of size (d, d).
+    mvm_fn : callable q -> A @ q, supports both (d,) and (d, S) inputs.
     d      : dimension of matrix A.
     rank   : target rank for deflation.
     key    : JAX PRNG key.
@@ -260,24 +263,28 @@ def nystrom_approximation(mvm_fn, d, rank, key):
     eigvals : (rank,) approximate top eigenvalues.
     eigvecs : (d, rank) approximate top eigenvectors.
     """
-    # Generate random sketch
+    # Generate random sketch — single GPU kernel
     Omega = jax.random.normal(key, shape=(d, rank), dtype=jnp.float64)
-    # Apply MVM to sketch
-    Y = jnp.column_stack([mvm_fn(Omega[:, j]) for j in range(rank)])
-    # Stabilize: Y = A @ Omega
-    # Nyström: A ≈ Y (Omega^T Y)^{-1} Y^T
-    # But for eigendecomposition, use the sketch directly
-    # QR factorization of Y for numerical stability
-    Q, R = jnp.linalg.qr(Y)
-    # Small eigenvalue problem: B = Q^T A Q, (rank × rank)
-    AQ = jnp.column_stack([mvm_fn(Q[:, j]) for j in range(rank)])
-    B = Q.T @ AQ
+
+    # Apply MVM to ALL sketch columns simultaneously (batched matmul)
+    Y = mvm_fn(Omega)                       # (d, rank) — ONE GPU kernel
+
+    # QR factorization for numerical stability
+    Q, R = jnp.linalg.qr(Y)                 # (d, rank)
+
+    # Small eigenvalue problem: B = Q^T A Q — batched
+    AQ = mvm_fn(Q)                           # (d, rank) — ONE GPU kernel
+    B = Q.T @ AQ                             # (rank, rank)
+
     # Symmetrize for numerical stability
     B = (B + B.T) / 2.0
-    # Eigendecomposition of the small matrix
+
+    # Eigendecomposition of the small (rank × rank) matrix
     evals, evecs_small = jnp.linalg.eigh(B)
+
     # Map back to original space
-    evecs = Q @ evecs_small
+    evecs = Q @ evecs_small                  # (d, rank)
+
     # Sort by descending eigenvalue
     idx = jnp.argsort(evals)[::-1]
     return evals[idx], evecs[:, idx]
@@ -299,13 +306,17 @@ def hutchpp_traces(
     """
     Deflation-accelerated Hutch++ trace estimation (Algorithm 1 in paper).
 
+    GPU-OPTIMIZED: All operations are fully vectorized batched matmuls.
+    The entire Hutch++ computation runs as a sequence of large matrix
+    operations, maximizing GPU utilization through XLA fusion.
+
     Estimates tr(A^p) for p = 1..max_power using the Hutch++ framework:
       Step 1: Use n_defl probes for Nyström deflation of dominant eigenspace
       Step 2: Use remaining probes for Hutchinson on well-conditioned residual
 
     Parameters
     ----------
-    mvm_fn         : callable q -> A @ q, for SPSD matrix A of size (d, d).
+    mvm_fn         : callable q -> A @ q, supports (d, S) batched input.
     d              : dimension of matrix A.
     n_probes       : total probe budget S.
     max_power      : highest power trace (default 4).
@@ -323,38 +334,36 @@ def hutchpp_traces(
     deflation_rank = min(deflation_rank, max(d - 1, 1))
     n_residual = max(n_probes - deflation_rank, 1)
 
-    # Step 1: Eigenspace deflation via Nyström
+    # Step 1: Eigenspace deflation via Nyström (2 GPU kernel calls)
     key, subkey = jax.random.split(key)
     eigvals, eigvecs = nystrom_approximation(mvm_fn, d, deflation_rank, subkey)
 
-    # Exact trace contribution from deflated eigenspace
-    traces_defl = jnp.zeros(max_power, dtype=jnp.float64)
-    for p in range(max_power):
-        traces_defl = traces_defl.at[p].set(jnp.sum(eigvals ** (p + 1)))
+    # Exact trace contribution from deflated eigenspace — vectorized
+    powers = jnp.arange(1, max_power + 1, dtype=jnp.float64)  # [1, 2, 3, 4]
+    # eigvals^p summed: traces_defl[p] = sum(eigvals^(p+1))
+    traces_defl = jnp.array([
+        jnp.sum(eigvals ** p) for p in range(1, max_power + 1)
+    ])
 
-    # Step 2: Residual Hutchinson estimation
-    # Deflation projector: v_residual = v - eigvecs eigvecs^T v
-    def deflated_mvm(q):
-        """Apply A to q, then project out the deflated eigenspace."""
-        Aq = mvm_fn(q)
-        # Remove deflated component: A_residual @ q ≈ A @ q - Σ λ_i (u_i u_i^T q)
-        proj = eigvecs.T @ q    # (rank,)
-        correction = eigvecs @ (eigvals * proj)  # (d,)
-        return Aq - correction
+    # Step 2: Residual Hutchinson — FULLY VECTORIZED over all probes
+    def deflated_mvm(Q):
+        """Apply A_residual to Q (d, S), removing deflated eigenspace."""
+        AQ = mvm_fn(Q)                          # (d, S)
+        proj = eigvecs.T @ Q                    # (rank, S)
+        correction = eigvecs @ (eigvals[:, None] * proj)  # (d, S)
+        return AQ - correction
 
     key, subkey = jax.random.split(key)
     R = jax.random.rademacher(subkey, shape=(d, n_residual), dtype=jnp.float64)
 
+    # Batched power iteration: all n_residual probes simultaneously
     traces_resid = jnp.zeros(max_power, dtype=jnp.float64)
-
-    for s in range(n_residual):
-        r_s = R[:, s]
-        v_state = r_s
-        for p in range(max_power):
-            v_state = deflated_mvm(v_state)
-            traces_resid = traces_resid.at[p].add(jnp.dot(r_s, v_state))
-
-    traces_resid = traces_resid / n_residual
+    V_state = R                                  # (d, n_residual)
+    for p in range(max_power):
+        V_state = deflated_mvm(V_state)          # (d, n_residual) — ONE GPU kernel
+        # tr estimate = (1/S) sum_s <r_s, A^{p+1} r_s>
+        tr_est = jnp.sum(R * V_state) / n_residual  # vectorized dot products
+        traces_resid = traces_resid.at[p].set(tr_est)
 
     return traces_defl + traces_resid
 
