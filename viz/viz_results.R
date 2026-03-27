@@ -132,14 +132,14 @@ p <- ggplot(plot_df, aes(x = expected, y = observed, colour = method)) +
   annotate(
     "text",
     x = max_val * 0.05, y = max_val * 0.95,
-    label = sprintf("Fed-cSPA λ[GC] == %.3f", lambda_spa),
+    label = sprintf('paste("Fed-cSPA", " ", lambda[GC] == %.3f)', lambda_spa),
     hjust = 0, vjust = 1, size = 3.2, colour = "grey30",
     family = base_family, parse = TRUE
   ) +
   annotate(
     "text",
     x = max_val * 0.05, y = max_val * 0.88,
-    label = sprintf("Asymptotic λ[GC] == %.3f", lambda_asym),
+    label = sprintf('paste("Asymptotic", " ", lambda[GC] == %.3f)', lambda_asym),
     hjust = 0, vjust = 1, size = 3.2, colour = "grey30",
     family = base_family, parse = TRUE
   ) +

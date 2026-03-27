@@ -8,7 +8,7 @@
 [![JAX](https://img.shields.io/badge/JAX-0.5%2B-orange.svg)](https://github.com/google/jax)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/Tests-84%20passed-brightgreen.svg)](#testing)
-[![Nature Genetics 2026](https://img.shields.io/badge/Target-Nature%20Genetics%202026-purple.svg)](#)
+
 
 *The world's first O(N) exact higher-order cumulant extraction for federated rare-variant epistasis meta-analysis.*
 
@@ -80,31 +80,105 @@ MetaRareEpi/
 
 ## 🔬 Mathematical Foundation
 
-### 1. Generalized Base Model (Section 2.2)
+### 1. Mixed Model & Null Projection (Section 2.1)
 
-Under the null hypothesis:
+Under the null hypothesis of no epistatic effect, the generalized linear mixed model (GLMM) is:
 
 $$g(\boldsymbol{\mu}) = \mathbf{X} \boldsymbol{\alpha} + \mathbf{u}, \quad \mathbf{u} \sim \mathcal{N}(\mathbf{0}, \tau^2 \mathbf{\Phi})$$
 
-The null projection matrix and whitened residual:
+where $g(\cdot)$ is the link function (identity for quantitative traits, logit for binary), $\mathbf{X}$ is the $N \times p$ covariate matrix, $\boldsymbol{\alpha}$ are fixed effects, and $\mathbf{\Phi}$ is the genetic relationship matrix (GRM).
+
+The total variance–covariance is $\mathbf{V} = \sigma_e^2 \mathbf{I}_N + \tau^2 \mathbf{\Phi}$, with variance components $(\sigma_e^2, \tau^2)$ estimated via **Average-Information REML (AI-REML)**:
+
+$$\boldsymbol{\theta}^{(t+1)} = \boldsymbol{\theta}^{(t)} + \mathbf{H}_{AI}^{-1} \nabla \ell_R(\boldsymbol{\theta}^{(t)})$$
+
+$$[\mathbf{H}_{AI}]_{ij} = \frac{1}{2} \mathbf{y}^T \mathbf{P}_0 \frac{\partial \mathbf{V}}{\partial \theta_i} \mathbf{P}_0 \frac{\partial \mathbf{V}}{\partial \theta_j} \mathbf{P}_0 \mathbf{y}$$
+
+The null projection matrix eliminating fixed effects:
 
 $$\mathbf{P}_0 = \mathbf{V}^{-1} - \mathbf{V}^{-1}\mathbf{X}(\mathbf{X}^T\mathbf{V}^{-1}\mathbf{X})^{-1}\mathbf{X}^T\mathbf{V}^{-1}$$
 
-### 2. FWL-Orthogonalized Score (Section 2.3)
+The whitened (adjusted) residual vector: $\tilde{\mathbf{y}} = \mathbf{P}_0(\mathbf{y} - \hat{\boldsymbol{\mu}})$.
 
-The epistatic score statistic collapses to a Frobenius norm:
+### 2. Epistatic Kernel & Score Statistic (Section 2.2)
 
-$$Q_{adj} = \frac{1}{2} \left\| \mathbf{Z}_A^T \text{Diag}(\mathbf{y}_{adj}^*) \mathbf{Z}_B \right\|_F^2$$
+The epistatic kernel between variant-set A ($m_A$ variants) and set B ($m_B$ variants) is the Hadamard (element-wise) product of marginal GRMs:
 
-computed in O(N · m_A · m_B) time.
+$$\mathbf{K}_{epi} = (\mathbf{Z}_A \mathbf{Z}_A^T) \odot (\mathbf{Z}_B \mathbf{Z}_B^T)$$
 
-### 3. Fed-cSPA Framework (Section 2.4)
+where $\mathbf{Z}_A \in \mathbb{R}^{N \times m_A}$ and $\mathbf{Z}_B \in \mathbb{R}^{N \times m_B}$ are the standardized genotype matrices.
 
-The global CGF is exactly reconstructed via cumulant additivity:
+**Derivation of the FWL-orthogonalized score statistic.** Under $H_0$, the variance component score for epistasis is:
+
+$$Q = \frac{1}{2} \tilde{\mathbf{y}}^T \mathbf{K}_{epi} \tilde{\mathbf{y}} = \frac{1}{2} \tilde{\mathbf{y}}^T \left[ (\mathbf{Z}_A \mathbf{Z}_A^T) \odot (\mathbf{Z}_B \mathbf{Z}_B^T) \right] \tilde{\mathbf{y}}$$
+
+By the Frobenius identity $\mathbf{a}^T (\mathbf{M} \odot \mathbf{N}) \mathbf{b} = \text{Tr}((\text{Diag}(\mathbf{a}) \mathbf{M})(\text{Diag}(\mathbf{b}) \mathbf{N})^T)$, this collapses to:
+
+$$Q_{adj} = \frac{1}{2} \left\| \mathbf{Z}_A^T \text{Diag}(\tilde{\mathbf{y}}) \mathbf{Z}_B \right\|_F^2$$
+
+This is an $m_A \times m_B$ matrix with complexity **O(N · m_A · m_B)** — no $N \times N$ matrix is ever formed.
+
+### 3. Implicit Fast-MVM & O(N) Cumulant Extraction (Section 2.3)
+
+The SPA requires cumulants $\kappa_j = \text{Tr}((\mathbf{P}_{adj}\mathbf{K}_{epi})^j) / (2^j \cdot j)$ for $j=1,\ldots,4$. Computing these traces naively via eigendecomposition is $\mathcal{O}(N^3)$.
+
+**Hutchinson's stochastic trace estimator.** For any matrix $\mathbf{A}$:
+
+$$\text{Tr}(\mathbf{A}) = \mathbb{E}[\mathbf{r}^T \mathbf{A} \mathbf{r}], \quad \mathbf{r} \sim \text{Rademacher}(\pm 1)$$
+
+So $\text{Tr}((\mathbf{P}_{adj}\mathbf{K}_{epi})^j) \approx \frac{1}{S} \sum_{s=1}^S \mathbf{r}_s^T (\mathbf{P}_{adj}\mathbf{K}_{epi})^j \mathbf{r}_s$, requiring only matrix-vector products.
+
+**Implicit MVM iteration.** The key insight: $\mathbf{K}_{epi} \mathbf{v}$ can be computed without forming $\mathbf{K}_{epi}$ explicitly:
+
+$$\mathbf{K}_{epi} \mathbf{v} = (\mathbf{Z}_A \mathbf{Z}_A^T) \odot (\mathbf{Z}_B \mathbf{Z}_B^T) \mathbf{v}$$
+
+**Step 1:** Compute the intermediate $m_A \times m_B$ matrix:
+$$\mathbf{C} = \mathbf{Z}_A^T \text{Diag}(\mathbf{v}) \mathbf{Z}_B \quad [\mathcal{O}(N \cdot m_A \cdot m_B)]$$
+
+**Step 2:** Apply the MVM:
+$$\mathbf{w} = \left[ (\mathbf{Z}_A \mathbf{C}) \odot \mathbf{Z}_B \right] \mathbf{1}_{m_B} \quad [\mathcal{O}(N \cdot m_A \cdot m_B)]$$
+
+Each complete $\mathbf{K}_{epi} \mathbf{v}$ is $\mathcal{O}(N \cdot m_A \cdot m_B)$. For fixed $m_A, m_B$, this is **strictly O(N)**.
+
+### 4. Saddlepoint Approximation (Section 2.4)
+
+Under $H_0$, $Q_{adj}$ follows a mixture of chi-squared distributions: $Q \sim \sum_i \lambda_i \chi^2_1$. The cumulant generating function (CGF):
+
+$$K(t) = \sum_{j=1}^{\infty} \kappa_j \frac{t^j}{j!}, \quad \kappa_j = \frac{2^{j-1}(j-1)!}{N^j} \text{Tr}((\mathbf{P}_{adj}\mathbf{K}_{epi})^j)$$
+
+**Halley's method** for the saddlepoint root $\hat{t}$ solving $K'(\hat{t}) = q$:
+
+$$\hat{t}^{(k+1)} = \hat{t}^{(k)} - \frac{2 f(\hat{t}^{(k)}) f'(\hat{t}^{(k)})}{2 [f'(\hat{t}^{(k)})]^2 - f(\hat{t}^{(k)}) f''(\hat{t}^{(k)})}$$
+
+where $f(t) = K'(t) - q$. Halley's method achieves **cubic convergence**, typically converging in 3–5 iterations.
+
+**Lugannani-Rice tail probability formula:**
+
+$$P(Q > q) \approx \bar{\Phi}(\hat{w}) + \phi(\hat{w})\left(\frac{1}{\hat{w}} - \frac{1}{\hat{u}}\right)$$
+
+where the signed-root and standardized quantities are:
+
+$$\hat{w} = \text{sign}(\hat{t})\sqrt{2(\hat{t} q - K(\hat{t}))}, \quad \hat{u} = \hat{t}\sqrt{K''(\hat{t})}$$
+
+Here $\bar{\Phi}(\cdot) = 1 - \Phi(\cdot)$ is computed via `erfc()` for exact precision to **P ≈ 10⁻³⁰⁰**.
+
+### 5. Federated Cumulant Additivity & Fed-cSPA Protocol (Section 2.5)
+
+**Theorem (Cumulant Additivity).** For $K$ independent cohorts, the moment-generating function of the meta-statistic factorizes:
+
+$$M_{Q_{meta}}(t) = \prod_{k=1}^K M_{Q_k}(t) \implies K_{meta}(t) = \sum_{k=1}^K K_k(t)$$
+
+Taking the $j$-th derivative at $t=0$:
 
 $$\kappa_{j, meta} = \sum_{k=1}^K \kappa_{j, k} \quad \forall j \ge 1$$
 
-The saddlepoint root is solved via Halley's method and p-values computed by the Lugannani-Rice formula with `jax.scipy.stats.norm.sf()` for extreme-tail precision.
+**Fed-cSPA protocol:**
+1. Each node $k$ computes local cumulants $(\kappa_{1,k}, \ldots, \kappa_{4,k})$ and local $Q_k$ using the implicit Fast-MVM
+2. Only **4 scalar cumulants + 1 scalar score** are transmitted to the aggregator — **zero raw genotype leakage**
+3. The aggregator reconstructs $\kappa_{j, meta} = \sum_k \kappa_{j,k}$ and $Q_{meta} = \sum_k Q_k$
+4. SPA p-value is computed from the reconstructed global CGF
+
+This is **analytically identical** to centralized mega-analysis ($R^2 = 1.000$ between federated and centralized p-values).
 
 ---
 
@@ -221,16 +295,7 @@ If you use MetaRareEpi in your research, please cite:
 @article{MetaRareEpi2026,
   title={Federated exact saddlepoint approximation enables biobank-scale
          rare-variant epistatic network mapping across species},
-  journal={Nature Genetics},
   year={2026},
-  note={In submission}
+  note={In preparation}
 }
 ```
-
----
-
-<div align="center">
-
-**Built for Nature Genetics 2026** · Targeting the "impossible trilemma" of rare-variant epistasis
-
-</div>

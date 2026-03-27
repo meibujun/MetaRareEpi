@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MetaRareEpi — Federated Rare-Variant Epistasis Framework</title>
-    <meta name="description" content="MetaRareEpi: O(N) federated exact saddlepoint approximation for biobank-scale rare-variant epistatic network mapping across species. Nature Genetics 2026.">
+    <meta name="description" content="MetaRareEpi: O(N) federated exact saddlepoint approximation for biobank-scale rare-variant epistatic network mapping across species.">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -42,7 +42,7 @@
                 <span class="badge badge-python">Python 3.14</span>
                 <span class="badge badge-jax">JAX · XLA</span>
                 <span class="badge badge-tests">84 Tests Passed</span>
-                <span class="badge badge-target">Nature Genetics 2026</span>
+
             </div>
             <h1>MetaRareEpi</h1>
             <p class="hero-subtitle">Federated Exact Saddlepoint Approximation for Biobank-Scale Rare-Variant Epistatic Network Mapping Across Species</p>
@@ -144,34 +144,114 @@
     <section id="mathematics" class="section">
         <div class="container">
             <h2 class="section-title">Mathematical Foundations</h2>
+            <p class="section-desc">Complete theoretical framework with derivations for each algorithmic component</p>
             <div class="math-grid">
+                <!-- Card 1: Mixed Model -->
                 <div class="math-card">
-                    <h3>FWL-Orthogonalized Score Statistic</h3>
+                    <h3>§2.1 Mixed Model & Null Projection</h3>
                     <div class="math-equation">
-                        $$Q_{adj} = \frac{1}{2} \left\| \mathbf{Z}_A^T \text{Diag}(\mathbf{y}_{adj}^*) \mathbf{Z}_B \right\|_F^2$$
+                        $$g(\boldsymbol{\mu}) = \mathbf{X}\boldsymbol{\alpha} + \mathbf{u}, \quad \mathbf{u} \sim \mathcal{N}(\mathbf{0}, \tau^2 \mathbf{\Phi})$$
                     </div>
-                    <p>The epistatic variance component score under FWL-orthogonalization collapses to a squared Frobenius norm of an $m_A \times m_B$ matrix, bypassing the $\mathcal{O}(N^2)$ covariance tensor entirely. This guarantees immunity to main-effect confounding.</p>
-                </div>
-                <div class="math-card">
-                    <h3>Implicit Fast-MVM Identity</h3>
+                    <p>Under $H_0$, the GLMM total variance is $\mathbf{V} = \sigma_e^2 \mathbf{I}_N + \tau^2 \mathbf{\Phi}$, with $(\sigma_e^2, \tau^2)$ estimated via <strong>AI-REML</strong>:</p>
                     <div class="math-equation">
-                        $$\text{Tr}((\mathbf{P}_{adj}\mathbf{K}_{epi})^j) \approx \frac{1}{S} \sum_{s=1}^S \mathbf{r}_s^T (\mathbf{P}_{adj}\mathbf{K}_{epi})^j \mathbf{r}_s$$
+                        $$\boldsymbol{\theta}^{(t+1)} = \boldsymbol{\theta}^{(t)} + \mathbf{H}_{AI}^{-1}\nabla\ell_R(\boldsymbol{\theta}^{(t)})$$
                     </div>
-                    <p>Higher-order cumulant traces are estimated via Hutchinson's stochastic estimator with $S$ Rademacher vectors, coupled with the implicit MVM iteration: $\mathbf{w}^{(i)} = [(\mathbf{Z}_A \mathbf{C}^{(i)}) \odot \mathbf{Z}_B] \mathbf{1}_{m_B}$ where $\mathbf{C}^{(i)} = \mathbf{Z}_A^T \text{Diag}(\mathbf{v}) \mathbf{Z}_B$. Each iteration is $\mathcal{O}(N \cdot m_A \cdot m_B)$.</p>
+                    <p>where $[\mathbf{H}_{AI}]_{ij} = \tfrac{1}{2}\mathbf{y}^T\mathbf{P}_0 \tfrac{\partial\mathbf{V}}{\partial\theta_i} \mathbf{P}_0 \tfrac{\partial\mathbf{V}}{\partial\theta_j} \mathbf{P}_0 \mathbf{y}$. The null projection eliminating fixed effects:</p>
+                    <div class="math-equation">
+                        $$\mathbf{P}_0 = \mathbf{V}^{-1} - \mathbf{V}^{-1}\mathbf{X}(\mathbf{X}^T\mathbf{V}^{-1}\mathbf{X})^{-1}\mathbf{X}^T\mathbf{V}^{-1}$$
+                    </div>
+                    <p>The whitened residual: $\tilde{\mathbf{y}} = \mathbf{P}_0(\mathbf{y} - \hat{\boldsymbol{\mu}})$.</p>
                 </div>
+
+                <!-- Card 2: Epistatic Kernel -->
                 <div class="math-card">
-                    <h3>Cumulant Additivity Theorem</h3>
+                    <h3>§2.2a Epistatic Kernel Construction</h3>
+                    <div class="math-equation">
+                        $$\mathbf{K}_{epi} = (\mathbf{Z}_A \mathbf{Z}_A^T) \odot (\mathbf{Z}_B \mathbf{Z}_B^T)$$
+                    </div>
+                    <p>The epistatic kernel between variant-sets A ($m_A$ variants) and B ($m_B$ variants) is the <strong>Hadamard product</strong> of marginal GRMs. $\mathbf{Z}_A \in \mathbb{R}^{N \times m_A}$ and $\mathbf{Z}_B \in \mathbb{R}^{N \times m_B}$ are standardized genotype matrices. The Hadamard product captures all pairwise interactions between variants in set A and set B, encoding the $m_A \cdot m_B$ interaction effects into a single $N \times N$ kernel — but we <em>never</em> actually form this dense matrix.</p>
+                </div>
+
+                <!-- Card 3: Score Statistic -->
+                <div class="math-card">
+                    <h3>§2.2b FWL-Orthogonalized Score Derivation</h3>
+                    <div class="math-equation">
+                        $$Q = \frac{1}{2}\tilde{\mathbf{y}}^T\mathbf{K}_{epi}\tilde{\mathbf{y}} = \frac{1}{2}\tilde{\mathbf{y}}^T\left[(\mathbf{Z}_A\mathbf{Z}_A^T) \odot (\mathbf{Z}_B\mathbf{Z}_B^T)\right]\tilde{\mathbf{y}}$$
+                    </div>
+                    <p>By the Frobenius identity $\mathbf{a}^T(\mathbf{M} \odot \mathbf{N})\mathbf{b} = \text{Tr}((\text{Diag}(\mathbf{a})\mathbf{M})(\text{Diag}(\mathbf{b})\mathbf{N})^T)$, this collapses to:</p>
+                    <div class="math-equation">
+                        $$Q_{adj} = \frac{1}{2}\left\|\mathbf{Z}_A^T \text{Diag}(\tilde{\mathbf{y}}) \mathbf{Z}_B\right\|_F^2$$
+                    </div>
+                    <p>An $m_A \times m_B$ matrix computation with complexity $\mathcal{O}(N \cdot m_A \cdot m_B)$ — no $N \times N$ matrix is ever formed. FWL-orthogonalization guarantees immunity to main-effect confounding.</p>
+                </div>
+
+                <!-- Card 4: Implicit Fast-MVM -->
+                <div class="math-card">
+                    <h3>§2.3 Implicit Fast-MVM Algorithm</h3>
+                    <div class="math-equation">
+                        $$\text{Tr}(\mathbf{A}) = \mathbb{E}[\mathbf{r}^T\mathbf{A}\mathbf{r}], \quad \mathbf{r} \sim \text{Rademacher}(\pm 1)$$
+                    </div>
+                    <p>The cumulant traces $\text{Tr}((\mathbf{P}_{adj}\mathbf{K}_{epi})^j)$ are estimated via Hutchinson's stochastic estimator with $S$ Rademacher vectors, coupled with the implicit two-step MVM:</p>
+                    <div class="math-equation">
+                        $$\mathbf{C} = \mathbf{Z}_A^T\text{Diag}(\mathbf{v})\mathbf{Z}_B \quad [\mathcal{O}(N \cdot m_A \cdot m_B)]$$
+                    </div>
+                    <div class="math-equation">
+                        $$\mathbf{w} = \left[(\mathbf{Z}_A\mathbf{C}) \odot \mathbf{Z}_B\right]\mathbf{1}_{m_B} \quad [\mathcal{O}(N \cdot m_A \cdot m_B)]$$
+                    </div>
+                    <p>Each $\mathbf{K}_{epi}\mathbf{v}$ is $\mathcal{O}(N \cdot m_A \cdot m_B)$. For fixed $m_A, m_B$ this is <strong>strictly O(N)</strong>, breaking the classical $\mathcal{O}(N^3)$ EVD barrier.</p>
+                </div>
+
+                <!-- Card 5: CGF -->
+                <div class="math-card">
+                    <h3>§2.4a Cumulant Generating Function (CGF)</h3>
+                    <div class="math-equation">
+                        $$K(t) = \sum_{j=1}^{\infty} \kappa_j \frac{t^j}{j!}, \quad \kappa_j = \frac{2^{j-1}(j-1)!}{N^j}\text{Tr}((\mathbf{P}_{adj}\mathbf{K}_{epi})^j)$$
+                    </div>
+                    <p>Under $H_0$, $Q_{adj} \sim \sum_i \lambda_i \chi^2_1$. The SPA reconstructs the null distribution from the first 4 cumulants of the CGF. <strong>Halley's method</strong> solves the saddlepoint root $K'(\hat{t}) = q$ with cubic convergence:</p>
+                    <div class="math-equation">
+                        $$\hat{t}^{(k+1)} = \hat{t}^{(k)} - \frac{2 f \cdot f'}{2(f')^2 - f \cdot f''}, \quad f(t) = K'(t) - q$$
+                    </div>
+                    <p>Typically converges in 3–5 iterations.</p>
+                </div>
+
+                <!-- Card 6: Lugannani-Rice -->
+                <div class="math-card">
+                    <h3>§2.4b Lugannani-Rice Tail Formula</h3>
+                    <div class="math-equation">
+                        $$P(Q > q) \approx \bar{\Phi}(\hat{w}) + \phi(\hat{w})\left(\frac{1}{\hat{w}} - \frac{1}{\hat{u}}\right)$$
+                    </div>
+                    <p>The signed-root and standardized quantities:</p>
+                    <div class="math-equation">
+                        $$\hat{w} = \text{sign}(\hat{t})\sqrt{2(\hat{t}q - K(\hat{t}))}, \quad \hat{u} = \hat{t}\sqrt{K''(\hat{t})}$$
+                    </div>
+                    <p>The survival function $\bar{\Phi}(\cdot) = 1 - \Phi(\cdot)$ is computed via <code>erfc()</code>, which provides exact floating-point precision to $P \approx 10^{-300}$ without numerical underflow — the key to accurate extreme-tail calibration.</p>
+                </div>
+
+                <!-- Card 7: Cumulant Additivity -->
+                <div class="math-card">
+                    <h3>§2.5a Cumulant Additivity Theorem</h3>
+                    <div class="math-equation">
+                        $$M_{Q_{meta}}(t) = \prod_{k=1}^K M_{Q_k}(t) \implies K_{meta}(t) = \sum_{k=1}^K K_k(t)$$
+                    </div>
+                    <p><strong>Proof.</strong> For $K$ independent cohorts, the MGF of the sum factorizes. Taking the logarithm and $j$-th derivative at $t=0$:</p>
                     <div class="math-equation">
                         $$\kappa_{j, meta} = \sum_{k=1}^K \kappa_{j, k} \quad \forall j \ge 1$$
                     </div>
-                    <p>For independent cohorts, the global CGF is the sum of local CGFs. This enables lossless federated meta-analysis by transmitting only 4 scalar cumulants per node — zero raw genotype data leakage while preserving 100% analytical equivalence to centralized mega-analysis.</p>
+                    <p>This fundamental property enables lossless federated meta-analysis by transmitting only 4 scalar cumulants per node, while preserving 100% analytical equivalence to centralized mega-analysis.</p>
                 </div>
+
+                <!-- Card 8: Fed-cSPA Protocol -->
                 <div class="math-card">
-                    <h3>Lugannani-Rice Tail Probability</h3>
+                    <h3>§2.5b Fed-cSPA Protocol & Privacy Guarantee</h3>
                     <div class="math-equation">
-                        $$P(X > q) \approx \bar{\Phi}(\hat{w}) + \phi(\hat{w})\left(\frac{1}{\hat{w}} - \frac{1}{\hat{u}}\right)$$
+                        $$\text{Transmit: } (\kappa_{1,k}, \kappa_{2,k}, \kappa_{3,k}, \kappa_{4,k}, Q_k) \quad \text{per node}$$
                     </div>
-                    <p>Where $\hat{w} = \text{sign}(\hat{t})\sqrt{2(\hat{t}q - K(\hat{t}))}$ and $\hat{u} = \hat{t}\sqrt{K''(\hat{t})}$. The survival function $\bar{\Phi}$ is computed via <code>erfc()</code> for exact precision to $P \approx 10^{-300}$.</p>
+                    <p><strong>Protocol steps:</strong></p>
+                    <p>① Each node $k$ computes local cumulants + score via implicit Fast-MVM<br>
+                       ② Only <strong>5 scalars</strong> transmitted — <strong>zero raw genotype leakage</strong><br>
+                       ③ Aggregator reconstructs $\kappa_{j,meta} = \sum_k \kappa_{j,k}$, $Q_{meta} = \sum_k Q_k$<br>
+                       ④ SPA p-value computed from reconstructed global CGF</p>
+                    <p>Result: <strong>$R^2 = 1.000$</strong> between federated and centralized p-values.</p>
                 </div>
             </div>
         </div>
@@ -307,7 +387,7 @@ python viz/viz_network.py       # Figure 4</code></pre>
         <div class="container">
             <div class="footer-content">
                 <div class="footer-logo">🧬 MetaRareEpi</div>
-                <p>Built for <em>Nature Genetics</em> 2026 · Dismantling the "impossible trilemma"</p>
+                <p>Federated Exact SPA for Rare-Variant Epistasis · Open Source</p>
                 <div class="footer-links">
                     <a href="https://github.com/meibujun/MetaRareEpi" target="_blank">GitHub</a>
                     <a href="#api">API Docs</a>
