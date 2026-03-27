@@ -90,37 +90,37 @@ where $g(\cdot)$ is the link function (identity for quantitative traits, logit f
 
 The total variance–covariance is:
 
-$$\mathbf{V} = \sigma_e^2 \, \mathbf{I}_N + \tau^2 \, \boldsymbol{\Phi}$$
+$$\mathbf{V} = \sigma_e^2 \mathbf{I}_N + \tau^2 \boldsymbol{\Phi}$$
 
 with variance components estimated via **Average-Information REML (AI-REML)**:
 
-$$\boldsymbol{\theta}^{(t+1)} = \boldsymbol{\theta}^{(t)} + \mathbf{H}_{AI}^{-1} \, \nabla \ell_R\!\left(\boldsymbol{\theta}^{(t)}\right)$$
+$$\boldsymbol{\theta}^{(t+1)} = \boldsymbol{\theta}^{(t)} + \mathbf{H}_{AI}^{-1} \nabla \ell_R \left(\boldsymbol{\theta}^{(t)}\right)$$
 
-$$\left[\mathbf{H}_{AI}\right]_{ij} = \frac{1}{2} \, \mathbf{y}^\top \mathbf{P}_0 \, \frac{\partial \mathbf{V}}{\partial \theta_i} \, \mathbf{P}_0 \, \frac{\partial \mathbf{V}}{\partial \theta_j} \, \mathbf{P}_0 \, \mathbf{y}$$
+$$\left[\mathbf{H}_{AI}\right]_{ij} = \frac{1}{2} \mathbf{y}^\top \mathbf{P}_0 \frac{\partial \mathbf{V}}{\partial \theta_i} \mathbf{P}_0 \frac{\partial \mathbf{V}}{\partial \theta_j} \mathbf{P}_0 \mathbf{y}$$
 
 The null projection matrix eliminating fixed effects:
 
-$$\mathbf{P}_0 = \mathbf{V}^{-1} - \mathbf{V}^{-1}\mathbf{X}\!\left(\mathbf{X}^\top \mathbf{V}^{-1}\mathbf{X}\right)^{-1}\!\mathbf{X}^\top \mathbf{V}^{-1}$$
+$$\mathbf{P}_0 = \mathbf{V}^{-1} - \mathbf{V}^{-1}\mathbf{X}\left(\mathbf{X}^\top \mathbf{V}^{-1}\mathbf{X}\right)^{-1}\mathbf{X}^\top \mathbf{V}^{-1}$$
 
 The whitened (adjusted) residual vector:
 
-$$\tilde{\mathbf{y}} = \mathbf{P}_0 \!\left(\mathbf{y} - \hat{\boldsymbol{\mu}}\right)$$
+$$\tilde{\mathbf{y}} = \mathbf{P}_0 \left(\mathbf{y} - \hat{\boldsymbol{\mu}}\right)$$
 
 ### 2. Epistatic Kernel & Score Statistic (Section 2.2)
 
 The epistatic kernel between variant-set A ( $m_A$ variants) and set B ( $m_B$ variants) is the Hadamard (element-wise) product of marginal GRMs:
 
-$$\mathbf{K}_{\mathrm{epi}} = \left(\mathbf{Z}_A \mathbf{Z}_A^\top\right) \odot \left(\mathbf{Z}_B \mathbf{Z}_B^\top\right)$$
+$$\mathbf{K}\_{\mathrm{epi}} = \left(\mathbf{Z}_A \mathbf{Z}_A^\top\right) \odot \left(\mathbf{Z}_B \mathbf{Z}_B^\top\right)$$
 
 where $\mathbf{Z}_A \in \mathbb{R}^{N \times m_A}$ and $\mathbf{Z}_B \in \mathbb{R}^{N \times m_B}$ are the standardized genotype matrices.
 
 **Derivation of the FWL-orthogonalized score statistic.** Under H₀, the variance component score for epistasis is:
 
-$$Q = \tfrac{1}{2} \, \tilde{\mathbf{y}}^\top \mathbf{K}_{\mathrm{epi}} \, \tilde{\mathbf{y}} = \tfrac{1}{2} \, \tilde{\mathbf{y}}^\top \!\left[ \left(\mathbf{Z}_A \mathbf{Z}_A^\top\right) \odot \left(\mathbf{Z}_B \mathbf{Z}_B^\top\right) \right] \tilde{\mathbf{y}}$$
+$$Q = \tfrac{1}{2} \tilde{\mathbf{y}}^\top \mathbf{K}\_{\mathrm{epi}} \tilde{\mathbf{y}} = \tfrac{1}{2} \tilde{\mathbf{y}}^\top \left[ \left(\mathbf{Z}_A \mathbf{Z}_A^\top\right) \odot \left(\mathbf{Z}_B \mathbf{Z}_B^\top\right) \right] \tilde{\mathbf{y}}$$
 
 By the Frobenius identity, this collapses to:
 
-$$Q_{\mathrm{adj}} = \frac{1}{2} \left\lVert \mathbf{Z}_A^\top \, \mathrm{Diag}(\tilde{\mathbf{y}}) \, \mathbf{Z}_B \right\rVert_F^2$$
+$$Q\_{\mathrm{adj}} = \frac{1}{2} \left\lVert \mathbf{Z}_A^\top \mathrm{Diag}(\tilde{\mathbf{y}}) \mathbf{Z}_B \right\rVert_F^2$$
 
 This is an $m_A \times m_B$ matrix computation with complexity **O(N · mₐ · m_B)** — no N × N matrix is ever formed.
 
@@ -128,57 +128,57 @@ This is an $m_A \times m_B$ matrix computation with complexity **O(N · mₐ · 
 
 The SPA requires cumulants κⱼ for j = 1, …, 4, defined as:
 
-$$\kappa_j = \frac{1}{2^j \cdot j} \, \mathrm{Tr}\!\left(\left(\mathbf{P}_{\mathrm{adj}} \, \mathbf{K}_{\mathrm{epi}}\right)^j\right)$$
+$$\kappa_j = \frac{1}{2^j \cdot j} \mathrm{Tr}\left(\left(\mathbf{P}\_{\mathrm{adj}} \mathbf{K}\_{\mathrm{epi}}\right)^j\right)$$
 
 Computing these traces naively via eigendecomposition costs O(N³).
 
 **Hutchinson's stochastic trace estimator.** For any matrix **A**:
 
-$$\mathrm{Tr}(\mathbf{A}) = \mathbb{E}\!\left[\mathbf{r}^\top \mathbf{A} \, \mathbf{r}\right], \quad \mathbf{r} \sim \mathrm{Rademacher}(\pm 1)$$
+$$\mathrm{Tr}(\mathbf{A}) = \mathbb{E}\left[\mathbf{r}^\top \mathbf{A} \mathbf{r}\right], \quad \mathbf{r} \sim \mathrm{Rademacher}(\pm 1)$$
 
 Higher-order traces are estimated as:
 
-$$\mathrm{Tr}\!\left(\left(\mathbf{P}_{\mathrm{adj}} \, \mathbf{K}_{\mathrm{epi}}\right)^j\right) \approx \frac{1}{S} \sum_{s=1}^{S} \mathbf{r}_s^\top \left(\mathbf{P}_{\mathrm{adj}} \, \mathbf{K}_{\mathrm{epi}}\right)^j \mathbf{r}_s$$
+$$\mathrm{Tr}\left(\left(\mathbf{P}\_{\mathrm{adj}} \mathbf{K}\_{\mathrm{epi}}\right)^j\right) \approx \frac{1}{S} \sum_{s=1}^{S} \mathbf{r}_s^\top \left(\mathbf{P}\_{\mathrm{adj}} \mathbf{K}\_{\mathrm{epi}}\right)^j \mathbf{r}_s$$
 
 requiring only matrix-vector products.
 
-**Implicit MVM iteration.** The key insight is that the product $\mathbf{K}_{\mathrm{epi}} \, \mathbf{v}$ can be computed without forming $\mathbf{K}_{\mathrm{epi}}$ explicitly:
+**Implicit MVM iteration.** The key insight is that **K**_epi **v** can be computed without forming **K**_epi explicitly:
 
-$$\mathbf{K}_{\mathrm{epi}} \, \mathbf{v} = \left[\left(\mathbf{Z}_A \mathbf{Z}_A^\top\right) \odot \left(\mathbf{Z}_B \mathbf{Z}_B^\top\right)\right] \mathbf{v}$$
+$$\mathbf{K}\_{\mathrm{epi}} \mathbf{v} = \left[\left(\mathbf{Z}_A \mathbf{Z}_A^\top\right) \odot \left(\mathbf{Z}_B \mathbf{Z}_B^\top\right)\right] \mathbf{v}$$
 
 **Step 1 — Intermediate matrix** (complexity O(N · mₐ · m_B)):
 
-$$\mathbf{C} = \mathbf{Z}_A^\top \, \mathrm{Diag}(\mathbf{v}) \, \mathbf{Z}_B$$
+$$\mathbf{C} = \mathbf{Z}_A^\top \mathrm{Diag}(\mathbf{v}) \mathbf{Z}_B$$
 
 **Step 2 — Apply the MVM** (complexity O(N · mₐ · m_B)):
 
-$$\mathbf{w} = \left[\left(\mathbf{Z}_A \, \mathbf{C}\right) \odot \mathbf{Z}_B\right] \mathbf{1}_{m_B}$$
+$$\mathbf{w} = \left[\left(\mathbf{Z}_A \mathbf{C}\right) \odot \mathbf{Z}_B\right] \mathbf{1}_{m_B}$$
 
-Each complete $\mathbf{K}_{\mathrm{epi}} \, \mathbf{v}$ costs O(N · mₐ · m_B). For fixed mₐ, m_B, this is **strictly O(N)**.
+Each complete **K**_epi **v** costs O(N · mₐ · m_B). For fixed mₐ, m_B, this is **strictly O(N)**.
 
 ### 4. Saddlepoint Approximation (Section 2.4)
 
-Under H₀, $Q_{\mathrm{adj}}$ follows a mixture of chi-squared distributions. The cumulant generating function (CGF):
+Under H₀, Q_adj follows a mixture of chi-squared distributions. The cumulant generating function (CGF):
 
-$$K(t) = \sum_{j=1}^{\infty} \kappa_j \, \frac{t^j}{j!}$$
+$$K(t) = \sum_{j=1}^{\infty} \kappa_j \frac{t^j}{j!}$$
 
 where:
 
-$$\kappa_j = \frac{2^{j-1} \, (j-1)!}{N^j} \, \mathrm{Tr}\!\left(\left(\mathbf{P}_{\mathrm{adj}} \, \mathbf{K}_{\mathrm{epi}}\right)^j\right)$$
+$$\kappa_j = \frac{2^{j-1} (j-1)!}{N^j} \mathrm{Tr}\left(\left(\mathbf{P}\_{\mathrm{adj}} \mathbf{K}\_{\mathrm{epi}}\right)^j\right)$$
 
 **Halley's method** for the saddlepoint root $\hat{t}$ solving $K'(\hat{t}) = q$ :
 
-$$\hat{t}^{(k+1)} = \hat{t}^{(k)} - \frac{2\,f(\hat{t}^{(k)})\,f'(\hat{t}^{(k)})}{2\left[f'(\hat{t}^{(k)})\right]^2 - f(\hat{t}^{(k)})\,f''(\hat{t}^{(k)})}$$
+$$\hat{t}^{(k+1)} = \hat{t}^{(k)} - \frac{2 f(\hat{t}^{(k)}) f'(\hat{t}^{(k)})}{2\left[f'(\hat{t}^{(k)})\right]^2 - f(\hat{t}^{(k)}) f''(\hat{t}^{(k)})}$$
 
 where $f(t) = K'(t) - q$. Halley's method achieves **cubic convergence**, typically converging in 3–5 iterations.
 
 **Lugannani-Rice tail probability formula:**
 
-$$P(Q > q) \approx \bar{\Phi}(\hat{w}) + \phi(\hat{w})\!\left(\frac{1}{\hat{w}} - \frac{1}{\hat{u}}\right)$$
+$$P(Q > q) \approx \bar{\Phi}(\hat{w}) + \phi(\hat{w})\left(\frac{1}{\hat{w}} - \frac{1}{\hat{u}}\right)$$
 
 where the signed-root and standardized quantities are:
 
-$$\hat{w} = \mathrm{sign}(\hat{t})\,\sqrt{2\!\left(\hat{t}\,q - K(\hat{t})\right)}, \qquad \hat{u} = \hat{t}\,\sqrt{K''(\hat{t})}$$
+$$\hat{w} = \mathrm{sign}(\hat{t})\sqrt{2\left(\hat{t} q - K(\hat{t})\right)}, \qquad \hat{u} = \hat{t}\sqrt{K''(\hat{t})}$$
 
 Here $\bar{\Phi}(\cdot) = 1 - \Phi(\cdot)$ is computed via `erfc()` for exact precision to **P ≈ 10⁻³⁰⁰**.
 
@@ -186,11 +186,11 @@ Here $\bar{\Phi}(\cdot) = 1 - \Phi(\cdot)$ is computed via `erfc()` for exact pr
 
 **Theorem (Cumulant Additivity).** For K independent cohorts, the MGF of the meta-statistic factorizes:
 
-$$M_{Q_{\mathrm{meta}}}(t) = \prod_{k=1}^{K} M_{Q_k}(t) \quad \Longrightarrow \quad K_{\mathrm{meta}}(t) = \sum_{k=1}^{K} K_k(t)$$
+$$M_{Q\_{\mathrm{meta}}}(t) = \prod_{k=1}^{K} M_{Q_k}(t) \quad \Longrightarrow \quad K\_{\mathrm{meta}}(t) = \sum_{k=1}^{K} K_k(t)$$
 
 Taking the j-th derivative at t = 0:
 
-$$\kappa_{j,\,\mathrm{meta}} = \sum_{k=1}^{K} \kappa_{j,k} \qquad \forall\; j \ge 1$$
+$$\kappa_{j, \mathrm{meta}} = \sum_{k=1}^{K} \kappa_{j,k} \qquad \forall j \ge 1$$
 
 **Fed-cSPA protocol:**
 
