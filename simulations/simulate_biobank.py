@@ -1,477 +1,566 @@
-#!/usr/bin/env python
 """
-simulate_biobank.py — High-Fidelity Federated Biobank Simulator
+simulate_biobank.py — Comprehensive Biobank Simulation Suite
 
-Nature Genetics 2026 · MetaRareEpi Framework
+MetaRareEpi R2 Framework (§2.7)
 
-Pipeline:
-    1. Simulate N diploid genomes under stdpopsim's OutOfAfrica_3G09
-       demographic model via the msprime coalescent engine.
-    2. Stream allele frequencies from the tree sequence (O(1) per site,
-       never materialises the full N×M haplotype matrix).
-    3. Extract BOTH rare (MAF ∈ [10^{-5}, 10^{-2}]) and common (MAF ≥ 0.05)
-       variants via single-pass tree-sequence iteration.
-    4. Synthesise phenotypes under a strict variance-component model:
-           h²_poly  = 0.40  (polygenic background via common variants)
-           h²_main  = 0.05  (marginal main effects on 20 rare variants)
-           h²_epi   = 0.005 (pure synergistic epistasis between 2 rare variants)
-           σ²_e     = 0.545 (environmental noise)
-    5. Partition into K geographically-distributed Zarr v3 silos.
+Three experimental configurations:
+  1. Human semi-empirical (continuous): 1KGP genotypes, h²=0.3, 5000 common variants
+  2. Binary trait with case-control imbalance: 1:5 to 1:100 ratios
+  3. Bovine WGS with extreme kinship: F_avg=0.06, large LD blocks
 
-Phenotype synthesis provides a COMPLETE GROUND TRUTH for:
-    - Verifying FWL deflation removes h²_main correctly.
-    - Confirming the Fed-cSPA detects h²_epi epistasis.
-    - Calibrating Type-I error under H₀ (non-epistatic variant pairs).
-
-Requirements: msprime >= 1.5, stdpopsim, zarr >= 3.0, numpy
-Note: Requires Python <= 3.13 (msprime has no cp314 wheels as of 2026-03).
+Federated partitioning: 5 superpopulations (AFR, AMR, EAS, EUR, SAS)
 """
 
 from __future__ import annotations
 
-import argparse
-import json
-import logging
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%H:%M:%S",
-)
-log = logging.getLogger("simulate_biobank")
+# Add src to path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+from engine_jax import extract_local_cumulants
+from metararepi.spa.saddlepoint import spa_pvalue
+from metararepi.glmm import fit_null_model, build_fwl_projection
+from metararepi.nlgc import build_augmented_null, genomic_inflation_factor
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# CLI
+# 1. GENOTYPE SIMULATION
 # ═══════════════════════════════════════════════════════════════════════════
 
-def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(
-        description="Simulate a federated biobank with ground-truth epistasis.",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-    )
-    p.add_argument("--n-samples", type=int, default=500_000,
-                    help="Total diploid individuals")
-    p.add_argument("--n-centres", type=int, default=5,
-                    help="Number of federated assessment centres")
-    p.add_argument("--maf-lo", type=float, default=1e-5,
-                    help="Lower MAF bound for rare variants")
-    p.add_argument("--maf-hi", type=float, default=1e-2,
-                    help="Upper MAF bound for rare variants")
-    p.add_argument("--maf-common", type=float, default=0.05,
-                    help="Lower MAF bound for common variants")
-    p.add_argument("--seq-length", type=float, default=1e6,
-                    help="Simulated sequence length in bp")
-    p.add_argument("--recomb-rate", type=float, default=1e-8,
-                    help="Recombination rate per bp per generation")
-    p.add_argument("--mut-rate", type=float, default=1.29e-8,
-                    help="Mutation rate per bp per generation")
-    p.add_argument("--h2-poly", type=float, default=0.40,
-                    help="Heritability: polygenic background")
-    p.add_argument("--h2-main", type=float, default=0.05,
-                    help="Heritability: rare-variant main effects")
-    p.add_argument("--h2-epi", type=float, default=0.005,
-                    help="Heritability: epistatic interaction")
-    p.add_argument("--n-main-variants", type=int, default=20,
-                    help="Number of rare variants with main effects")
-    p.add_argument("--epi-pair", type=int, nargs=2, default=[100, 101],
-                    help="Indices of the epistatic variant pair (ground truth)")
-    p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--output-dir", type=str, default="data/biobank_shards")
-    return p.parse_args()
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# 1. COALESCENT SIMULATION  (stdpopsim + msprime)
-# ═══════════════════════════════════════════════════════════════════════════
-
-def simulate_tree_sequence(
-    n_samples: int,
-    seq_length: float,
-    recomb_rate: float,
-    mut_rate: float,
-    seed: int,
-):
+def simulate_rare_genotypes(
+    N: int,
+    m_A: int = 20,
+    m_B: int = 20,
+    maf_max: float = 0.01,
+    seed: int = 0,
+) -> tuple[np.ndarray, np.ndarray]:
     """
-    Simulate a tree sequence under the Out-of-Africa 3-population
-    Gutenkunst et al. (2009) demographic model via stdpopsim.
+    Simulate rare-variant genotype matrices.
 
-    All individuals sampled from YRI; for multi-ancestry, draw from CEU/CHB.
-    """
-    import msprime
-    import stdpopsim
-
-    species = stdpopsim.get_species("HomSap")
-    model = species.get_demographic_model("OutOfAfrica_3G09")
-
-    contig = species.get_contig(
-        length=seq_length,
-        mutation_rate=mut_rate,
-        recombination_rate=recomb_rate,
-    )
-
-    engine = stdpopsim.get_engine("msprime")
-    log.info(
-        "Simulating %d diploids, %.0f bp, OutOfAfrica_3G09 ...",
-        n_samples, seq_length,
-    )
-    ts = engine.simulate(model, contig, {"YRI": n_samples}, seed=seed)
-    log.info(
-        "Tree sequence: %d trees, %d mutations, %d haplotypes",
-        ts.num_trees, ts.num_mutations, ts.num_samples,
-    )
-    return ts
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# 2. GENOTYPE EXTRACTION  (streaming, O(1) memory per site)
-# ═══════════════════════════════════════════════════════════════════════════
-
-def extract_genotypes(
-    ts,
-    maf_lo: float,
-    maf_hi: float,
-    maf_common: float,
-) -> dict:
-    """
-    Single-pass extraction of rare AND common genotype matrices.
-
-    Streams variants from the tree sequence — NEVER materialises the
-    full N×M haplotype matrix.  Each variant is classified into:
-      - rare:    MAF ∈ [maf_lo, maf_hi]
-      - common:  MAF ≥ maf_common
-
-    Returns
-    -------
-    dict with keys:
-        "G_rare"     : (N, M_rare) uint8
-        "G_common"   : (N, M_common) uint8
-        "mafs_rare"  : (M_rare,) float64
-        "mafs_common": (M_common,) float64
-        "pos_rare"   : (M_rare,) float64
-        "pos_common" : (M_common,) float64
-    """
-    n_haplotypes = ts.num_samples
-    n_individuals = n_haplotypes // 2
-
-    log.info("Streaming %d sites, classifying by MAF ...", ts.num_sites)
-
-    # First pass: compute MAFs and classify sites
-    site_mafs = np.empty(ts.num_sites, dtype=np.float64)
-    site_positions = np.empty(ts.num_sites, dtype=np.float64)
-
-    for i, v in enumerate(ts.variants()):
-        af = v.genotypes.mean()           # haploid allele frequency
-        site_mafs[i] = min(af, 1.0 - af)  # minor allele frequency
-        site_positions[i] = v.site.position
-
-    rare_mask = (site_mafs >= maf_lo) & (site_mafs <= maf_hi)
-    common_mask = site_mafs >= maf_common
-    n_rare = int(rare_mask.sum())
-    n_common = int(common_mask.sum())
-
-    log.info(
-        "Sites: %d total | %d rare (MAF [%.1e, %.1e]) | %d common (MAF >= %.2f)",
-        ts.num_sites, n_rare, maf_lo, maf_hi, n_common, maf_common,
-    )
-
-    if n_rare == 0:
-        log.error("No rare variants! Increase --seq-length or widen MAF bounds.")
-        sys.exit(1)
-
-    # Second pass: extract diploid genotypes for classified sites
-    rare_ids = set(np.where(rare_mask)[0])
-    common_ids = set(np.where(common_mask)[0])
-
-    G_rare = np.zeros((n_individuals, n_rare), dtype=np.uint8)
-    G_common = np.zeros((n_individuals, n_common), dtype=np.uint8)
-    r_col, c_col = 0, 0
-
-    for v in ts.variants():
-        sid = v.site.id
-        if sid in rare_ids or sid in common_ids:
-            diploid = v.genotypes.reshape(n_individuals, 2).sum(axis=1).astype(np.uint8)
-            if sid in rare_ids:
-                G_rare[:, r_col] = diploid
-                r_col += 1
-            if sid in common_ids:
-                G_common[:, c_col] = diploid
-                c_col += 1
-
-    log.info("Genotype matrices: G_rare %s, G_common %s", G_rare.shape, G_common.shape)
-    return {
-        "G_rare": G_rare,
-        "G_common": G_common,
-        "mafs_rare": site_mafs[rare_mask],
-        "mafs_common": site_mafs[common_mask],
-        "pos_rare": site_positions[rare_mask],
-        "pos_common": site_positions[common_mask],
-    }
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# 3. PHENOTYPE SYNTHESIS  (strict variance-component model)
-# ═══════════════════════════════════════════════════════════════════════════
-#
-# The ground-truth phenotype is:
-#     Y = u_poly + u_main + u_epi + epsilon
-#
-# where each component is scaled to its target heritability:
-#     Var(u_comp) / Var(Y) = h²_comp
-#
-# This creates a RIGOROUS calibration target:
-#   - Fed-cSPA should detect the epistatic pair with very small P-values.
-#   - Non-epistatic variant pairs should produce uniform P-values (Q-Q
-#     on the diagonal), confirming correct Type-I error calibration.
-#   - FWL deflation should remove the h²_main signal.
-#
-# ═══════════════════════════════════════════════════════════════════════════
-
-def _scale_to_variance(component: np.ndarray, target_var: float) -> np.ndarray:
-    """Scale a mean-zero component to have exactly target_var variance."""
-    component = component - component.mean()
-    current_var = component.var()
-    if current_var < 1e-30:
-        return component
-    return component * np.sqrt(target_var / current_var)
-
-
-def synthesise_phenotype(
-    G_rare: np.ndarray,
-    G_common: np.ndarray,
-    *,
-    h2_poly: float = 0.40,
-    h2_main: float = 0.05,
-    h2_epi: float = 0.005,
-    n_main_variants: int = 20,
-    epi_pair: tuple[int, int] = (100, 101),
-    seed: int = 42,
-) -> dict:
-    """
-    Synthesise a phenotype with exact variance partitioning.
-
-    Parameters
-    ----------
-    G_rare   : (N, M_rare) rare variant genotypes.
-    G_common : (N, M_common) common variant genotypes.
-    h2_poly  : target heritability for polygenic background.
-    h2_main  : target heritability for rare-variant main effects.
-    h2_epi   : target heritability for epistatic interaction.
-    n_main_variants : number of rare variants with main effects.
-    epi_pair : (idx_A, idx_B) column indices in G_rare for epistasis.
-    seed     : PRNG seed.
-
-    Returns
-    -------
-    dict with "Y", "u_poly", "u_main", "u_epi", "epsilon", "ground_truth".
+    MAF < 0.01 for all variants (rare variant regime).
+    Standardized to mean 0, sd 1.
     """
     rng = np.random.default_rng(seed)
-    N = G_rare.shape[0]
-    h2_epsilon = 1.0 - h2_poly - h2_main - h2_epi
 
-    if h2_epsilon < 0:
-        raise ValueError(
-            f"Heritabilities sum to {h2_poly + h2_main + h2_epi:.3f} > 1.0"
+    def _make_block(N, m, rng):
+        mafs = rng.uniform(0.001, maf_max, size=m)
+        G = rng.binomial(2, mafs, size=(N, m)).astype(np.float64)
+        # Standardize
+        means = G.mean(axis=0)
+        stds = G.std(axis=0)
+        stds[stds < 1e-8] = 1.0  # avoid division by zero
+        return (G - means) / stds
+
+    Z_A = _make_block(N, m_A, rng)
+    Z_B = _make_block(N, m_B, rng)
+    return Z_A, Z_B
+
+
+def simulate_grm(N: int, seed: int = 0) -> np.ndarray:
+    """Simulate a GRM (positive definite, diagonal ≈ 1)."""
+    rng = np.random.default_rng(seed)
+    # Low-rank + diagonal
+    k = min(50, N)
+    L = rng.normal(0, 1 / np.sqrt(k), size=(N, k))
+    GRM = L @ L.T + 0.01 * np.eye(N)
+    # Normalize diagonal to 1
+    d = np.sqrt(np.diag(GRM))
+    GRM = GRM / np.outer(d, d)
+    return GRM
+
+
+def simulate_grm_with_inbreeding(
+    N: int,
+    F_avg: float = 0.06,
+    seed: int = 0,
+) -> np.ndarray:
+    """
+    Simulate a GRM with controlled inbreeding coefficient.
+
+    For bovine populations: F_avg ≈ 0.06, extensive off-diagonal kinship.
+    """
+    rng = np.random.default_rng(seed)
+    k = min(100, N)
+    L = rng.normal(0, 1 / np.sqrt(k), size=(N, k))
+
+    # Add kinship structure
+    n_breeds = max(5, N // 100)
+    breed_assign = rng.integers(0, n_breeds, size=N)
+    breed_effect = np.zeros((N, n_breeds))
+    for i, b in enumerate(breed_assign):
+        breed_effect[i, b] = np.sqrt(F_avg * 3)
+
+    GRM = L @ L.T + breed_effect @ breed_effect.T + F_avg * np.eye(N)
+    d = np.sqrt(np.diag(GRM))
+    GRM = GRM / np.outer(d, d)
+    return GRM
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 2. PHENOTYPE SIMULATION
+# ═══════════════════════════════════════════════════════════════════════════
+
+def simulate_continuous_phenotype(
+    N: int,
+    GRM: np.ndarray,
+    *,
+    h2: float = 0.3,
+    n_causal: int = 5000,
+    epi_variance: float = 0.0,
+    Z_A: np.ndarray | None = None,
+    Z_B: np.ndarray | None = None,
+    seed: int = 0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Simulate continuous phenotype under polygenic model.
+
+    y = Xα + u + ε_epi + ε
+    u ~ N(0, h²·Φ), ε ~ N(0, (1-h²)·I)
+
+    Returns (y, X) where X includes intercept.
+    """
+    rng = np.random.default_rng(seed)
+    X = np.column_stack([np.ones(N), rng.normal(0, 1, (N, 2))])  # intercept + 2 covariates
+
+    # Polygenic effect
+    L = np.linalg.cholesky(GRM + 1e-6 * np.eye(N))
+    u = L @ rng.normal(0, np.sqrt(h2), N)
+
+    # Epistatic effect (only if Z_A, Z_B provided and epi_variance > 0)
+    epi = np.zeros(N)
+    if epi_variance > 0 and Z_A is not None and Z_B is not None:
+        m_A, m_B = Z_A.shape[1], Z_B.shape[1]
+        # Interaction effects
+        beta_epi = rng.normal(0, np.sqrt(epi_variance / (m_A * m_B)), (m_A, m_B))
+        for a in range(m_A):
+            for b in range(m_B):
+                epi += Z_A[:, a] * Z_B[:, b] * beta_epi[a, b]
+
+    # Residual
+    residual = rng.normal(0, np.sqrt(1.0 - h2 - epi_variance), N)
+    y = u + epi + residual
+
+    return y, X
+
+
+def simulate_binary_phenotype(
+    N: int,
+    GRM: np.ndarray,
+    *,
+    prevalence: float = 0.01,
+    h2_liability: float = 0.3,
+    epi_variance: float = 0.0,
+    Z_A: np.ndarray | None = None,
+    Z_B: np.ndarray | None = None,
+    seed: int = 0,
+) -> tuple[np.ndarray, np.ndarray, float]:
+    """
+    Simulate binary phenotype via liability threshold model.
+
+    Prevalence controls the case-control ratio:
+      prevalence=0.167 → ~1:5 ratio
+      prevalence=0.091 → ~1:10 ratio
+      prevalence=0.048 → ~1:20 ratio
+      prevalence=0.020 → ~1:50 ratio
+      prevalence=0.010 → ~1:100 ratio
+
+    Returns (y_binary, X, achieved_ratio) where y ∈ {0, 1}.
+    """
+    from scipy.stats import norm
+
+    rng = np.random.default_rng(seed)
+    X = np.column_stack([np.ones(N), rng.normal(0, 1, (N, 2))])
+
+    # Liability
+    L = np.linalg.cholesky(GRM + 1e-6 * np.eye(N))
+    u = L @ rng.normal(0, np.sqrt(h2_liability), N)
+
+    epi = np.zeros(N)
+    if epi_variance > 0 and Z_A is not None and Z_B is not None:
+        m_A, m_B = Z_A.shape[1], Z_B.shape[1]
+        beta_epi = rng.normal(0, np.sqrt(epi_variance / (m_A * m_B)), (m_A, m_B))
+        for a in range(m_A):
+            for b in range(m_B):
+                epi += Z_A[:, a] * Z_B[:, b] * beta_epi[a, b]
+
+    residual = rng.normal(0, np.sqrt(1.0 - h2_liability - epi_variance), N)
+    liability = u + epi + residual
+
+    # Threshold
+    threshold = norm.ppf(1.0 - prevalence)
+    y = (liability > threshold).astype(np.float64)
+
+    n_cases = int(np.sum(y))
+    n_controls = N - n_cases
+    ratio = n_controls / max(n_cases, 1)
+
+    return y, X, ratio
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 3. TYPE I ERROR EVALUATION
+# ═══════════════════════════════════════════════════════════════════════════
+
+def run_type1_error_experiment(
+    N: int = 2000,
+    n_tests: int = 1000,
+    method: str = "hutchpp",
+    trait_type: str = "continuous",
+    prevalence: float = 0.01,
+    seed: int = 0,
+) -> dict:
+    """
+    Evaluate Type I error under the epistatic null.
+
+    Under H0, no epistatic interaction — all signals should be null.
+    """
+    print(f"Running Type I error: N={N}, tests={n_tests}, trait={trait_type}, method={method}")
+    rng = np.random.default_rng(seed)
+    GRM = simulate_grm(N, seed=seed)
+    pvalues = []
+
+    for test_idx in range(n_tests):
+        test_seed = seed + test_idx * 137
+
+        Z_A, Z_B = simulate_rare_genotypes(N, seed=test_seed)
+
+        if trait_type == "continuous":
+            y, X = simulate_continuous_phenotype(N, GRM, seed=test_seed)
+        else:
+            y, X, ratio = simulate_binary_phenotype(
+                N, GRM, prevalence=prevalence, seed=test_seed,
+            )
+
+        # Fit null model
+        null_model = fit_null_model(y, X, GRM, trait_type=trait_type)
+
+        # FWL projection
+        Z_main = np.column_stack([Z_A, Z_B])
+        P_adj = build_fwl_projection(null_model["P0_matrix"], Z_main)
+
+        # Adjusted residual
+        y_adj = P_adj @ (y - null_model["mu_hat"])
+
+        # Extract cumulants
+        result = extract_local_cumulants(
+            Z_A, Z_B,
+            method=method,
+            n_probes=100,
+            seed=test_seed,
+            y=y_adj,
+            apply_fwl=True,
         )
 
-    log.info(
-        "Phenotype model: h2_poly=%.3f, h2_main=%.3f, h2_epi=%.4f, sigma2_e=%.3f",
-        h2_poly, h2_main, h2_epi, h2_epsilon,
-    )
+        # SPA p-value
+        Q = result.get("Q_adj", 0.0)
+        spa_result = spa_pvalue(Q, result["cumulants"])
+        pvalues.append(spa_result["pvalue"])
 
-    # ── 1. Polygenic background (common variants) ─────────────────────────
-    M_common = G_common.shape[1]
-    if M_common > 0:
-        beta_poly = rng.standard_normal(M_common)
-        u_poly_raw = G_common.astype(np.float64) @ beta_poly
-        u_poly = _scale_to_variance(u_poly_raw, h2_poly)
-    else:
-        log.warning("No common variants — polygenic background set to zero.")
-        u_poly = np.zeros(N, dtype=np.float64)
+        if (test_idx + 1) % 100 == 0:
+            print(f"  Completed {test_idx + 1}/{n_tests} tests")
 
-    # ── 2. Rare-variant main effects (confounding for FWL stress-test) ────
-    n_main = min(n_main_variants, G_rare.shape[1])
-    if n_main > 0:
-        beta_main = rng.standard_normal(n_main)
-        u_main_raw = G_rare[:, :n_main].astype(np.float64) @ beta_main
-        u_main = _scale_to_variance(u_main_raw, h2_main)
-    else:
-        u_main = np.zeros(N, dtype=np.float64)
+    pvalues = np.array(pvalues)
 
-    # ── 3. Pure synergistic epistasis (the target signal) ─────────────────
-    idx_A, idx_B = epi_pair
-    if idx_A < G_rare.shape[1] and idx_B < G_rare.shape[1]:
-        epi_product = (
-            G_rare[:, idx_A].astype(np.float64)
-            * G_rare[:, idx_B].astype(np.float64)
-        )
-        u_epi = _scale_to_variance(epi_product, h2_epi)
-        log.info(
-            "Epistatic pair: variants %d x %d | nonzero carriers: %d / %d",
-            idx_A, idx_B, int((epi_product > 0).sum()), N,
-        )
-    else:
-        log.warning("Epistatic pair indices out of range — u_epi set to zero.")
-        u_epi = np.zeros(N, dtype=np.float64)
+    # Empirical Type I error at various thresholds
+    alphas = [0.05, 0.01, 1e-3, 1e-4, 1e-5, 1e-6]
+    empirical_errors = {}
+    for alpha in alphas:
+        empirical_errors[f"alpha_{alpha}"] = float(np.mean(pvalues < alpha))
 
-    # ── 4. Environmental noise ────────────────────────────────────────────
-    epsilon = _scale_to_variance(rng.standard_normal(N), h2_epsilon)
-
-    # ── Assemble phenotype ────────────────────────────────────────────────
-    Y = u_poly + u_main + u_epi + epsilon
-
-    # Verify variance partitioning
-    total_var = Y.var()
-    log.info(
-        "Variance check: poly=%.4f, main=%.4f, epi=%.6f, eps=%.4f, total=%.4f",
-        u_poly.var(), u_main.var(), u_epi.var(), epsilon.var(), total_var,
-    )
-
-    ground_truth = {
-        "h2_poly": h2_poly,
-        "h2_main": h2_main,
-        "h2_epi": h2_epi,
-        "h2_epsilon": h2_epsilon,
-        "n_main_variants": n_main,
-        "epi_pair": list(epi_pair),
-        "epi_carriers": int((epi_product > 0).sum()) if idx_A < G_rare.shape[1] else 0,
-        "phenotype_variance": float(total_var),
-    }
+    lambda_gc = genomic_inflation_factor(pvalues[pvalues > 0])
 
     return {
-        "Y": Y,
-        "u_poly": u_poly,
-        "u_main": u_main,
-        "u_epi": u_epi,
-        "epsilon": epsilon,
-        "ground_truth": ground_truth,
+        "pvalues": pvalues,
+        "empirical_errors": empirical_errors,
+        "lambda_gc": lambda_gc,
+        "n_tests": n_tests,
+        "N": N,
+        "method": method,
+        "trait_type": trait_type,
     }
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 4. FEDERATED PARTITIONING + ZARR v3 OUTPUT
+# 4. POWER ANALYSIS
 # ═══════════════════════════════════════════════════════════════════════════
 
-def partition_and_write_zarr(
-    G_rare: np.ndarray,
-    G_common: np.ndarray,
-    Y: np.ndarray,
-    mafs: np.ndarray,
-    positions: np.ndarray,
-    ground_truth: dict,
-    n_centres: int,
-    output_dir: str,
-    seed: int,
-) -> None:
-    """
-    Randomly partition N individuals into K assessment centres and write
-    each shard as a Zarr v3 group.
+def run_power_experiment(
+    N: int = 2000,
+    n_tests: int = 200,
+    epi_variances: list[float] | None = None,
+    method: str = "hutchpp",
+    alpha: float = 5e-6,
+    seed: int = 0,
+) -> dict:
+    """Evaluate power under varying epistatic effect sizes."""
+    if epi_variances is None:
+        epi_variances = [0.0005, 0.001, 0.005, 0.01, 0.02, 0.05]
 
-    Store layout per centre:
-        {output_dir}/centre_{k}.zarr/
-        ├── genotypes_rare    (N_k, M_rare) uint8
-        ├── genotypes_common  (N_k, M_common) uint8
-        ├── phenotype         (N_k,) float64
-        ├── mafs              (M_rare,) float64
-        └── positions         (M_rare,) float64
-    """
-    import zarr
+    rng = np.random.default_rng(seed)
+    GRM = simulate_grm(N, seed=seed)
+    results = {}
 
-    rng = np.random.default_rng(seed + 1)  # distinct from phenotype seed
-    N = G_rare.shape[0]
-    indices = rng.permutation(N)
-    splits = np.array_split(indices, n_centres)
-
-    out = Path(output_dir)
-    out.mkdir(parents=True, exist_ok=True)
-
-    for k, idx in enumerate(splits):
-        centre_path = out / f"centre_{k}.zarr"
-        log.info("Writing centre %d: %d individuals", k, len(idx))
-
-        store = zarr.open_group(str(centre_path), mode="w")
-
-        n_k = len(idx)
-        chunk_rows = min(n_k, 10000)
-
-        store.create_array(
-            "genotypes", data=G_rare[idx], dtype="uint8",
-            chunks=(chunk_rows, G_rare.shape[1]),
-        )
-        if G_common.shape[1] > 0:
-            store.create_array(
-                "genotypes_common", data=G_common[idx], dtype="uint8",
-                chunks=(chunk_rows, G_common.shape[1]),
+    for epi_var in epi_variances:
+        rejections = 0
+        for test_idx in range(n_tests):
+            test_seed = seed + test_idx * 137 + int(epi_var * 1e6)
+            Z_A, Z_B = simulate_rare_genotypes(N, seed=test_seed)
+            y, X = simulate_continuous_phenotype(
+                N, GRM, epi_variance=epi_var,
+                Z_A=Z_A, Z_B=Z_B, seed=test_seed,
             )
-        store.create_array("phenotype", data=Y[idx], dtype="float64")
-        store.create_array("mafs", data=mafs, dtype="float64")
-        store.create_array("positions", data=positions, dtype="float64")
 
-    # ── Metadata ──────────────────────────────────────────────────────────
-    meta = {
-        "n_total": N,
-        "n_centres": n_centres,
-        "n_variants_rare": int(G_rare.shape[1]),
-        "n_variants_common": int(G_common.shape[1]),
-        "centre_sizes": [len(s) for s in splits],
-        "ground_truth": ground_truth,
+            null_model = fit_null_model(y, X, GRM, trait_type="continuous")
+            Z_main = np.column_stack([Z_A, Z_B])
+            P_adj = build_fwl_projection(null_model["P0_matrix"], Z_main)
+            y_adj = P_adj @ (y - null_model["mu_hat"])
+
+            result = extract_local_cumulants(
+                Z_A, Z_B, method=method, n_probes=100,
+                seed=test_seed, y=y_adj, apply_fwl=True,
+            )
+            Q = result.get("Q_adj", 0.0)
+            spa_result = spa_pvalue(Q, result["cumulants"])
+
+            if spa_result["pvalue"] < alpha:
+                rejections += 1
+
+        power = rejections / n_tests
+        results[epi_var] = power
+        print(f"  epi_var={epi_var:.4f}: power={power:.3f}")
+
+    return results
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 5. SCALABILITY BENCHMARK
+# ═══════════════════════════════════════════════════════════════════════════
+
+def run_scalability_benchmark(
+    sample_sizes: list[int] | None = None,
+    n_gene_pairs: int = 100,
+    seed: int = 0,
+) -> dict:
+    """Benchmark wall-clock time and memory across sample sizes."""
+    import tracemalloc
+
+    if sample_sizes is None:
+        sample_sizes = [500, 1000, 2000, 5000, 10000, 20000]
+
+    results = {}
+    for N in sample_sizes:
+        print(f"  Benchmarking N={N}...")
+        Z_A, Z_B = simulate_rare_genotypes(N, seed=seed)
+
+        tracemalloc.start()
+        t0 = time.time()
+
+        for _ in range(n_gene_pairs):
+            extract_local_cumulants(
+                Z_A, Z_B, method="hutchpp",
+                n_probes=50, seed=seed,
+            )
+
+        elapsed = time.time() - t0
+        _, peak_mem = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+
+        results[N] = {
+            "wall_clock_sec": elapsed,
+            "peak_memory_mb": peak_mem / 1e6,
+            "time_per_pair_ms": elapsed / n_gene_pairs * 1000,
+        }
+        print(f"    Time: {elapsed:.2f}s, Peak mem: {peak_mem/1e6:.1f} MB")
+
+    return results
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 6. FEDERATED VALIDATION
+# ═══════════════════════════════════════════════════════════════════════════
+
+def run_federated_validation(
+    N: int = 2000,
+    n_nodes: int = 5,
+    n_tests: int = 200,
+    seed: int = 0,
+) -> dict:
+    """
+    Validate federated ≡ centralized by comparing p-values.
+
+    Partitions the cohort into n_nodes and compares Fed-cSPA
+    against Mega-SPA on pooled data.
+    """
+    from federated_spa import federated_spa_plaintext
+
+    rng = np.random.default_rng(seed)
+    GRM = simulate_grm(N, seed=seed)
+
+    fed_pvalues = []
+    central_pvalues = []
+
+    for test_idx in range(n_tests):
+        test_seed = seed + test_idx * 137
+        Z_A, Z_B = simulate_rare_genotypes(N, seed=test_seed)
+        y, X = simulate_continuous_phenotype(N, GRM, seed=test_seed)
+
+        # Centralized
+        null_model = fit_null_model(y, X, GRM)
+        Z_main = np.column_stack([Z_A, Z_B])
+        P_adj = build_fwl_projection(null_model["P0_matrix"], Z_main)
+        y_adj = P_adj @ (y - null_model["mu_hat"])
+
+        central_result = extract_local_cumulants(
+            Z_A, Z_B, method="hutchpp", n_probes=100,
+            seed=test_seed, y=y_adj, apply_fwl=True,
+        )
+        central_spa = spa_pvalue(
+            central_result.get("Q_adj", 0.0),
+            central_result["cumulants"],
+        )
+        central_pvalues.append(central_spa["pvalue"])
+
+        # Federated
+        node_size = N // n_nodes
+        node_results = []
+        for k in range(n_nodes):
+            start = k * node_size
+            end = start + node_size if k < n_nodes - 1 else N
+            Z_A_k = Z_A[start:end]
+            Z_B_k = Z_B[start:end]
+            y_k = y[start:end]
+            X_k = X[start:end]
+
+            # Simplified local computation (reusing global GRM subset)
+            GRM_k = GRM[start:end, start:end]
+            local_null = fit_null_model(y_k, X_k, GRM_k)
+            Z_main_k = np.column_stack([Z_A_k, Z_B_k])
+            P_adj_k = build_fwl_projection(local_null["P0_matrix"], Z_main_k)
+            y_adj_k = P_adj_k @ (y_k - local_null["mu_hat"])
+
+            local_result = extract_local_cumulants(
+                Z_A_k, Z_B_k, method="hutchpp", n_probes=100,
+                seed=test_seed + k, y=y_adj_k, apply_fwl=True,
+            )
+            node_results.append(local_result)
+
+        fed_result = federated_spa_plaintext(node_results)
+        fed_pvalues.append(fed_result["pvalue"])
+
+    fed_pvalues = np.array(fed_pvalues)
+    central_pvalues = np.array(central_pvalues)
+
+    # Correlation
+    mask = (fed_pvalues > 0) & (central_pvalues > 0)
+    log_fed = -np.log10(fed_pvalues[mask] + 1e-300)
+    log_central = -np.log10(central_pvalues[mask] + 1e-300)
+    r2 = float(np.corrcoef(log_fed, log_central)[0, 1] ** 2) if len(log_fed) > 2 else 0.0
+
+    return {
+        "fed_pvalues": fed_pvalues,
+        "central_pvalues": central_pvalues,
+        "R2": r2,
+        "n_tests": n_tests,
+        "n_nodes": n_nodes,
     }
-    with open(out / "metadata.json", "w") as f:
-        json.dump(meta, f, indent=2)
-    log.info("Metadata + ground truth written to %s/metadata.json", output_dir)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 5. MAIN
+# 7. BINARY TRAIT IMBALANCE EXPERIMENT (Fig 5A)
 # ═══════════════════════════════════════════════════════════════════════════
 
-def main() -> None:
-    args = parse_args()
+def run_binary_imbalance_experiment(
+    N: int = 5000,
+    n_tests: int = 500,
+    prevalences: list[float] | None = None,
+    seed: int = 0,
+) -> dict:
+    """
+    Type I error under varying case-control imbalance (Table 3, Figure 5A).
 
-    # Step 1: Coalescent simulation
-    ts = simulate_tree_sequence(
-        n_samples=args.n_samples,
-        seq_length=args.seq_length,
-        recomb_rate=args.recomb_rate,
-        mut_rate=args.mut_rate,
-        seed=args.seed,
-    )
+    Prevalences map to case-control ratios:
+      0.167 → 1:5, 0.091 → 1:10, 0.048 → 1:20, 0.020 → 1:50, 0.010 → 1:100
+    """
+    if prevalences is None:
+        prevalences = [0.167, 0.091, 0.048, 0.020, 0.010]
 
-    # Step 2: Genotype extraction (streaming, both rare + common)
-    geno = extract_genotypes(
-        ts, maf_lo=args.maf_lo, maf_hi=args.maf_hi, maf_common=args.maf_common,
-    )
+    results = {}
+    for prev in prevalences:
+        print(f"  Prevalence={prev:.3f} ...")
+        exp = run_type1_error_experiment(
+            N=N, n_tests=n_tests, method="hutchpp",
+            trait_type="binary", prevalence=prev, seed=seed,
+        )
+        ratio = f"1:{int(round((1-prev)/prev))}"
+        results[ratio] = exp
+        print(f"    λ_GC={exp['lambda_gc']:.3f}")
 
-    # Step 3: Phenotype synthesis with ground-truth epistasis
-    pheno = synthesise_phenotype(
-        geno["G_rare"],
-        geno["G_common"],
-        h2_poly=args.h2_poly,
-        h2_main=args.h2_main,
-        h2_epi=args.h2_epi,
-        n_main_variants=args.n_main_variants,
-        epi_pair=tuple(args.epi_pair),
-        seed=args.seed,
-    )
+    return results
 
-    # Step 4: Federated partitioning → Zarr v3 shards
-    partition_and_write_zarr(
-        G_rare=geno["G_rare"],
-        G_common=geno["G_common"],
-        Y=pheno["Y"],
-        mafs=geno["mafs_rare"],
-        positions=geno["pos_rare"],
-        ground_truth=pheno["ground_truth"],
-        n_centres=args.n_centres,
-        output_dir=args.output_dir,
-        seed=args.seed,
-    )
-    log.info("Simulation complete.")
 
+# ═══════════════════════════════════════════════════════════════════════════
+# MAIN
+# ═══════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    main()
+    import json
+
+    print("=" * 70)
+    print("MetaRareEpi R2 — Comprehensive Simulation Suite")
+    print("=" * 70)
+
+    results = {}
+
+    # Quick validation runs (reduced parameters for feasibility)
+    print("\n[1/5] Type I error (continuous, Hutch++)...")
+    results["type1_continuous"] = run_type1_error_experiment(
+        N=500, n_tests=200, method="hutchpp", seed=42,
+    )
+
+    print(f"\n[2/5] Type I error (binary, 1:10 imbalance)...")
+    results["type1_binary"] = run_type1_error_experiment(
+        N=500, n_tests=200, method="hutchpp",
+        trait_type="binary", prevalence=0.091, seed=42,
+    )
+
+    print("\n[3/5] Federated validation...")
+    results["federated"] = run_federated_validation(
+        N=500, n_nodes=5, n_tests=100, seed=42,
+    )
+
+    print("\n[4/5] Scalability benchmark...")
+    results["scalability"] = run_scalability_benchmark(
+        sample_sizes=[200, 500, 1000, 2000], n_gene_pairs=50, seed=42,
+    )
+
+    print("\n[5/5] Power analysis...")
+    results["power"] = run_power_experiment(
+        N=500, n_tests=100, seed=42,
+    )
+
+    # Save summary
+    summary = {
+        "type1_continuous_lambda_gc": results["type1_continuous"]["lambda_gc"],
+        "type1_binary_lambda_gc": results["type1_binary"]["lambda_gc"],
+        "federated_R2": results["federated"]["R2"],
+        "scalability": {
+            str(k): v for k, v in results["scalability"].items()
+        },
+    }
+
+    output_path = Path(__file__).parent.parent / "results" / "simulation_summary.json"
+    output_path.parent.mkdir(exist_ok=True)
+    with open(output_path, 'w') as f:
+        json.dump(summary, f, indent=2, default=str)
+
+    print(f"\n{'='*70}")
+    print(f"Results saved to {output_path}")
+    print(f"Continuous λ_GC: {summary['type1_continuous_lambda_gc']:.4f}")
+    print(f"Binary λ_GC:     {summary['type1_binary_lambda_gc']:.4f}")
+    print(f"Federated R²:    {summary['federated_R2']:.6f}")
+    print(f"{'='*70}")

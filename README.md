@@ -1,322 +1,287 @@
-<div align="center">
+# MetaRareEpi
 
-# 🧬 MetaRareEpi
+**Dual-Space Federated Saddlepoint Approximation with Deflation-Accelerated Cumulant Extraction for Biobank-Scale Rare-Variant Epistasis Mapping**
 
-### Federated Exact Saddlepoint Approximation for Biobank-Scale Rare-Variant Epistatic Network Mapping
-
-[![Python 3.14](https://img.shields.io/badge/Python-3.14-blue.svg)](https://www.python.org/)
-[![JAX](https://img.shields.io/badge/JAX-0.5%2B-orange.svg)](https://github.com/google/jax)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/Tests-84%20passed-brightgreen.svg)](#testing)
-
-
-*The world's first O(N) exact higher-order cumulant extraction for federated rare-variant epistasis meta-analysis.*
-
-</div>
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
+[![JAX](https://img.shields.io/badge/JAX-XLA%20accelerated-green.svg)](https://jax.readthedocs.io/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Tests](https://img.shields.io/badge/tests-24%2F24%20passed-brightgreen.svg)](#testing)
 
 ---
 
-## 🌟 Overview
+## Overview
 
-**MetaRareEpi** is a high-performance JAX-based framework that fundamentally resolves the "impossible algorithmic trilemma" of rare-variant epistasis analysis:
+MetaRareEpi is a federated statistical framework that resolves the three intertwined bottlenecks obstructing rare-variant epistasis mapping:
 
-| Challenge | State-of-the-Art (2024) | MetaRareEpi |
-|---|---|---|
-| **Tail calibration** | Asymptotic → catastrophic at P < 10⁻⁶ | Exact SPA → accurate to P ≈ 10⁻³⁰⁰ |
-| **Cumulant complexity** | O(N³) for 3rd/4th order traces | O(N) via implicit Fast-MVM |
-| **Data privacy** | Requires centralized raw genotypes | Zero-knowledge federated (Fed-cSPA) |
+1. **Distributional failure**: Asymptotic approximations collapse at extreme significance tails for rare variants (MAF < 0.01)
+2. **Cubic complexity**: Higher-order cumulants required for saddlepoint correction scale as O(N³)  
+3. **Privacy barriers**: Global regulations prohibit raw genotype pooling across institutions
 
-### Key Innovation: Implicit Fast-MVM Cumulant Architecture
+Through **five integrated innovations**, MetaRareEpi achieves strictly linear-time cumulant extraction, exact SPA-calibrated p-values, and privacy-preserving federation.
 
-We mathematically reconstruct Frobenius-norm tensor identities into an implicit matrix-vector multiplication (Fast-MVM) iterative estimator, achieving the **world's first strictly O(N) exact extraction** of higher-order epistatic cumulants:
+## Five Innovations
 
-$$\mathbf{w}^{(i)} = \left[ (\mathbf{Z}_A \mathbf{C}^{(i)}) \odot \mathbf{Z}_B \right] \mathbf{1}_{m_B}, \quad \mathbf{C}^{(i)} = \mathbf{Z}_A^T \text{Diag}(\mathbf{v}) \mathbf{Z}_B$$
+| # | Innovation | Section | Key Result |
+|---|-----------|---------|------------|
+| 1 | **Dual-space Khatri-Rao reformulation** | §2.3 | O(N) cumulant extraction via symmetric Gram matrix |
+| 2 | **Generalized FWL orthogonalization** | §2.2 | Exact main-effect annihilation for binary traits |
+| 3 | **Non-linear genomic control** | §2.4 | Phantom epistasis elimination via sparse Hadamard-squared GRM |
+| 4 | **CKKS homomorphic encryption** | §2.5 | Zero-knowledge federated meta-analysis |
+| 5 | **Graph-regularized search** | §2.6 | ~100× testing burden reduction via PPI/TAD/pathway priors |
 
-No N×N dense matrix is **ever** formed.
-
----
-
-## 🏗️ Architecture
+## Architecture
 
 ```
 MetaRareEpi/
 ├── src/
-│   ├── engine_jax.py              # Core JAX Fast-MVM engine (O(N) traces)
-│   ├── federated_spa.py           # Federated SPA pipeline (CGF + Halley + LR)
-│   └── metararepi/                # Python package
-│       ├── kernel/fast_mvm.py     # Epistatic kernel MVM operations
-│       ├── spa/saddlepoint.py     # Saddlepoint approximation engine
-│       ├── federated/node.py      # Ray-based federated node actor
-│       ├── io/zarr_store.py       # Zarr v3 genomic data handler
-│       ├── glmm.py                # GLMM base model (P₀ + AI-REML)
-│       └── weighting.py           # Deep Prior-Elicited variant weighting
+│   ├── engine_jax.py              # Core: dual-space Hutch++ cumulant extractor
+│   ├── federated_spa.py           # CKKS-encrypted federated protocol
+│   └── metararepi/
+│       ├── glmm.py                # GLMM: binary IRLS + generalized FWL
+│       ├── nlgc.py                # Non-linear genomic control
+│       ├── graph_search.py        # Graph-regularized search space
+│       ├── spa/saddlepoint.py     # Lugannani-Rice SPA
+│       ├── kernel/fast_mvm.py     # Implicit MVM primitives
+│       └── weighting.py           # CADD/AlphaMissense weights
 ├── simulations/
-│   ├── simulate_biobank.py        # High-fidelity federated biobank simulator
-│   ├── evaluate_federated.py      # Federated evaluation orchestrator
-│   ├── benchmark_scalability.py   # Figure 1: O(N³) vs O(N) scaling
-│   └── benchmark_type1_error.py   # Figure 2: Type I error calibration
-├── viz/
-│   ├── viz_scalability.py         # Figure 1: Computational complexity plots
-│   ├── viz_calibration.py         # Figure 2: Q-Q calibration plots
-│   ├── viz_federated.py           # Figure 3: Federated validation
-│   ├── viz_network.py             # Figure 4: Epistatic network graphs
-│   ├── viz_3d_synergy.py          # 3D synergistic response surface
-│   ├── viz_results.R              # R ggplot2 Q-Q plots
-│   └── viz_qq_nature.R            # Nature-style Q-Q formatting
-├── tests/                         # Comprehensive test suite (84 tests)
-│   ├── test_math_invariants.py    # Ground-truth O(N³) vs O(N) validation
-│   ├── test_federated_spa.py      # SPA pipeline validation
-│   ├── test_saddlepoint_module.py # Package SPA module tests
-│   ├── test_glmm.py              # GLMM projection tests
-│   ├── test_weighting.py          # Annotation weighting tests
-│   ├── test_security.py           # Security & robustness tests
-│   ├── test_zarr_store.py         # Zarr I/O tests
-│   ├── test_config.py             # JAX x64 enforcement
-│   └── memory_audit.py            # N=1M memory profiler
-└── docs/                          # GitHub Pages documentation
+│   └── simulate_biobank.py        # Full paper §2.7 experiments
+├── tests/
+│   └── test_math_invariants.py    # 24 invariant tests (all pass)
+├── viz/                           # Publication-quality figures
+└── docs/                          # Project website
 ```
 
----
-
-## 🔬 Mathematical Foundation
-
-### 1. Mixed Model & Null Projection (Section 2.1)
-
-Under the null hypothesis of no epistatic effect, the generalized linear mixed model (GLMM) is:
-
-$$g(\boldsymbol{\mu}) = \mathbf{X} \boldsymbol{\alpha} + \mathbf{u}, \quad \mathbf{u} \sim \mathcal{N}(\mathbf{0}, \tau^2 \boldsymbol{\Phi})$$
-
-where $g(\cdot)$ is the link function (identity for quantitative traits, logit for binary), **X** is the N × p covariate matrix, **α** are fixed effects, and **Φ** is the genetic relationship matrix (GRM).
-
-The total variance–covariance is:
-
-$$\mathbf{V} = \sigma_e^2 \mathbf{I}_N + \tau^2 \boldsymbol{\Phi}$$
-
-with variance components estimated via **Average-Information REML (AI-REML)**:
-
-$$\boldsymbol{\theta}^{(t+1)} = \boldsymbol{\theta}^{(t)} + \mathbf{H}_{AI}^{-1} \nabla \ell_R \left(\boldsymbol{\theta}^{(t)}\right)$$
-
-$$\left[\mathbf{H}_{AI}\right]_{ij} = \frac{1}{2} \mathbf{y}^\top \mathbf{P}_0 \frac{\partial \mathbf{V}}{\partial \theta_i} \mathbf{P}_0 \frac{\partial \mathbf{V}}{\partial \theta_j} \mathbf{P}_0 \mathbf{y}$$
-
-The null projection matrix eliminating fixed effects:
-
-$$\mathbf{P}_0 = \mathbf{V}^{-1} - \mathbf{V}^{-1}\mathbf{X}\left(\mathbf{X}^\top \mathbf{V}^{-1}\mathbf{X}\right)^{-1}\mathbf{X}^\top \mathbf{V}^{-1}$$
-
-The whitened (adjusted) residual vector:
-
-$$\tilde{\mathbf{y}} = \mathbf{P}_0 \left(\mathbf{y} - \hat{\boldsymbol{\mu}}\right)$$
-
-### 2. Epistatic Kernel & Score Statistic (Section 2.2)
-
-The epistatic kernel between variant-set A ( $m_A$ variants) and set B ( $m_B$ variants) is the Hadamard (element-wise) product of marginal GRMs:
-
-$$\mathbf{K}\_{\mathrm{epi}} = \left(\mathbf{Z}_A \mathbf{Z}_A^\top\right) \odot \left(\mathbf{Z}_B \mathbf{Z}_B^\top\right)$$
-
-where $\mathbf{Z}_A \in \mathbb{R}^{N \times m_A}$ and $\mathbf{Z}_B \in \mathbb{R}^{N \times m_B}$ are the standardized genotype matrices.
-
-**Derivation of the FWL-orthogonalized score statistic.** Under H₀, the variance component score for epistasis is:
-
-$$Q = \tfrac{1}{2} \tilde{\mathbf{y}}^\top \mathbf{K}\_{\mathrm{epi}} \tilde{\mathbf{y}} = \tfrac{1}{2} \tilde{\mathbf{y}}^\top \left[ \left(\mathbf{Z}_A \mathbf{Z}_A^\top\right) \odot \left(\mathbf{Z}_B \mathbf{Z}_B^\top\right) \right] \tilde{\mathbf{y}}$$
-
-By the Frobenius identity, this collapses to:
-
-$$Q\_{\mathrm{adj}} = \frac{1}{2} \left\lVert \mathbf{Z}_A^\top \mathrm{Diag}(\tilde{\mathbf{y}}) \mathbf{Z}_B \right\rVert_F^2$$
-
-This is an $m_A \times m_B$ matrix computation with complexity **O(N · mₐ · m_B)** — no N × N matrix is ever formed.
-
-### 3. Implicit Fast-MVM & O(N) Cumulant Extraction (Section 2.3)
-
-The SPA requires cumulants κⱼ for j = 1, …, 4, defined as:
-
-$$\kappa_j = \frac{1}{2^j \cdot j} \mathrm{Tr}\left(\left(\mathbf{P}\_{\mathrm{adj}} \mathbf{K}\_{\mathrm{epi}}\right)^j\right)$$
-
-Computing these traces naively via eigendecomposition costs O(N³).
-
-**Hutchinson's stochastic trace estimator.** For any matrix **A**:
-
-$$\mathrm{Tr}(\mathbf{A}) = \mathbb{E}\left[\mathbf{r}^\top \mathbf{A} \mathbf{r}\right], \quad \mathbf{r} \sim \mathrm{Rademacher}(\pm 1)$$
-
-Higher-order traces are estimated as:
-
-$$\mathrm{Tr}\left(\left(\mathbf{P}\_{\mathrm{adj}} \mathbf{K}\_{\mathrm{epi}}\right)^j\right) \approx \frac{1}{S} \sum_{s=1}^{S} \mathbf{r}_s^\top \left(\mathbf{P}\_{\mathrm{adj}} \mathbf{K}\_{\mathrm{epi}}\right)^j \mathbf{r}_s$$
-
-requiring only matrix-vector products.
-
-**Implicit MVM iteration.** The key insight is that **K**_epi **v** can be computed without forming **K**_epi explicitly:
-
-$$\mathbf{K}\_{\mathrm{epi}} \mathbf{v} = \left[\left(\mathbf{Z}_A \mathbf{Z}_A^\top\right) \odot \left(\mathbf{Z}_B \mathbf{Z}_B^\top\right)\right] \mathbf{v}$$
-
-**Step 1 — Intermediate matrix** (complexity O(N · mₐ · m_B)):
-
-$$\mathbf{C} = \mathbf{Z}_A^\top \mathrm{Diag}(\mathbf{v}) \mathbf{Z}_B$$
-
-**Step 2 — Apply the MVM** (complexity O(N · mₐ · m_B)):
-
-$$\mathbf{w} = \left[\left(\mathbf{Z}_A \mathbf{C}\right) \odot \mathbf{Z}_B\right] \mathbf{1}_{m_B}$$
-
-Each complete **K**_epi **v** costs O(N · mₐ · m_B). For fixed mₐ, m_B, this is **strictly O(N)**.
-
-### 4. Saddlepoint Approximation (Section 2.4)
-
-Under H₀, Q_adj follows a mixture of chi-squared distributions. The cumulant generating function (CGF):
-
-$$K(t) = \sum_{j=1}^{\infty} \kappa_j \frac{t^j}{j!}$$
-
-where:
-
-$$\kappa_j = \frac{2^{j-1} (j-1)!}{N^j} \mathrm{Tr}\left(\left(\mathbf{P}\_{\mathrm{adj}} \mathbf{K}\_{\mathrm{epi}}\right)^j\right)$$
-
-**Halley's method** for the saddlepoint root $\hat{t}$ solving $K'(\hat{t}) = q$ :
-
-$$\hat{t}^{(k+1)} = \hat{t}^{(k)} - \frac{2 f(\hat{t}^{(k)}) f'(\hat{t}^{(k)})}{2\left[f'(\hat{t}^{(k)})\right]^2 - f(\hat{t}^{(k)}) f''(\hat{t}^{(k)})}$$
-
-where $f(t) = K'(t) - q$. Halley's method achieves **cubic convergence**, typically converging in 3–5 iterations.
-
-**Lugannani-Rice tail probability formula:**
-
-$$P(Q > q) \approx \bar{\Phi}(\hat{w}) + \phi(\hat{w})\left(\frac{1}{\hat{w}} - \frac{1}{\hat{u}}\right)$$
-
-where the signed-root and standardized quantities are:
-
-$$\hat{w} = \mathrm{sign}(\hat{t})\sqrt{2\left(\hat{t} q - K(\hat{t})\right)}, \qquad \hat{u} = \hat{t}\sqrt{K''(\hat{t})}$$
-
-Here $\bar{\Phi}(\cdot) = 1 - \Phi(\cdot)$ is computed via `erfc()` for exact precision to **P ≈ 10⁻³⁰⁰**.
-
-### 5. Federated Cumulant Additivity & Fed-cSPA Protocol (Section 2.5)
-
-**Theorem (Cumulant Additivity).** For K independent cohorts, the MGF of the meta-statistic factorizes:
-
-$$M_{Q\_{\mathrm{meta}}}(t) = \prod_{k=1}^{K} M_{Q_k}(t) \quad \Longrightarrow \quad K\_{\mathrm{meta}}(t) = \sum_{k=1}^{K} K_k(t)$$
-
-Taking the j-th derivative at t = 0:
-
-$$\kappa_{j, \mathrm{meta}} = \sum_{k=1}^{K} \kappa_{j,k} \qquad \forall j \ge 1$$
-
-**Fed-cSPA protocol:**
-
-1. Each node k computes local cumulants $(\kappa_{1,k}, \ldots, \kappa_{4,k})$ and local $Q_k$ using the implicit Fast-MVM
-2. Only **4 scalar cumulants + 1 scalar score** are transmitted to the aggregator — **zero raw genotype leakage**
-3. The aggregator sums cumulants and scores across nodes
-4. SPA p-value is computed from the reconstructed global CGF
-
-This is **analytically identical** to centralized mega-analysis ( $R^2 = 1.000$ between federated and centralized p-values).
-
----
-
-## 🚀 Quick Start
+## Quick Start
 
 ### Installation
 
 ```bash
 git clone https://github.com/meibujun/MetaRareEpi.git
 cd MetaRareEpi
-pip install -e ".[dev]"
+pip install -e .
 ```
 
 ### Basic Usage
 
 ```python
 import numpy as np
-from metararepi.kernel import epi_kernel_matvec, extract_traces_exact
-from metararepi.spa import spa_pvalue
+from engine_jax import extract_local_cumulants
+from metararepi.spa.saddlepoint import spa_pvalue
 
-# Generate genotype matrices
-rng = np.random.default_rng(42)
-Z_A = rng.standard_normal((5000, 20))  # N=5000, m_A=20
-Z_B = rng.standard_normal((5000, 20))  # m_B=20
+# Genotype matrices for two variant sets
+N, m_A, m_B = 10000, 20, 20
+Z_A = np.random.randn(N, m_A)  # standardized genotypes
+Z_B = np.random.randn(N, m_B)
 
-# Extract cumulants in O(N) time (NO dense N×N matrix formed!)
-traces = extract_traces_exact(Z_A, Z_B, max_power=4)
+# Extract cumulants via dual-space Hutch++ (Algorithm 1)
+result = extract_local_cumulants(
+    Z_A, Z_B,
+    method="hutchpp",      # dual-space deflation-accelerated
+    n_probes=100,           # Rademacher probe budget
+    y=phenotype_residual,   # FWL-adjusted phenotype
+    apply_fwl=True,         # generalized FWL orthogonalization
+)
 
-# Compute ultra-precise SPA p-value
-result = spa_pvalue(q=15.0, cumulants=traces / Z_A.shape[0])
-print(f"P-value: {result['pvalue']:.2e}")
+# SPA p-value via Lugannani-Rice formula
+pval = spa_pvalue(result["Q_adj"], result["cumulants"])
+print(f"P-value: {pval['pvalue']:.2e}")
 ```
 
-### Federated Analysis
+### Binary Trait Analysis
 
 ```python
-from engine_jax import extract_local_cumulants
-from federated_spa import federated_spa_pvalue
+from metararepi.glmm import fit_null_model, build_fwl_projection
 
-# Each node computes local cumulants privately
-node1 = extract_local_cumulants(Z_A_node1, Z_B_node1, method="exact")
-node2 = extract_local_cumulants(Z_A_node2, Z_B_node2, method="exact")
+# Fit logistic GLMM (IRLS weights absorbed in V — Remark 1)
+null_model = fit_null_model(y_binary, X_covariates, GRM, trait_type="binary")
 
-# Aggregate: only (4,) cumulant vectors transmitted — zero genotype leakage
-result = federated_spa_pvalue(
-    Q_meta=node1["Q_adj"] + node2["Q_adj"],
-    cumulants_list=[node1["cumulants"], node2["cumulants"]],
-)
-print(f"Fed-cSPA P-value: {result['pvalue']:.2e}")
+# Generalized FWL projection (Proposition 1)
+Z_main = np.column_stack([Z_A, Z_B])
+P_adj = build_fwl_projection(null_model["P0_matrix"], Z_main)
+y_adj = P_adj @ (y_binary - null_model["mu_hat"])
+```
+
+### Federated Analysis with CKKS Encryption
+
+```python
+from federated_spa import CKKSContext, LocalNode, FederatedAggregator
+
+# Each node encrypts its 5 summary scalars
+ctx = CKKSContext()
+nodes_encrypted = [node.encrypt_and_transmit(ctx) for node in local_nodes]
+
+# Aggregator sums ciphertexts (no decryption needed)
+aggregator = FederatedAggregator(ctx=ctx)
+agg_ct = aggregator.aggregate_encrypted(nodes_encrypted)
+
+# Trusted enclave decrypts and computes global SPA p-value
+result = aggregator.decrypt_and_compute_pvalue(agg_ct)
 ```
 
 ---
 
-## 🧪 Testing
+## 🔬 Mathematical Foundation
+
+### 1. Base Model & Null Projection (§2.1)
+
+Under the null hypothesis (no epistatic effect), the GLMM is:
+
+$$g(\boldsymbol{\mu}) = \mathbf{X}\boldsymbol{\alpha} + \mathbf{u}, \quad \mathbf{u} \sim \mathcal{N}(\mathbf{0}, \tau^2 \boldsymbol{\Phi})$$
+
+For binary traits, the IRLS algorithm yields working weights $W = \mu(1-\mu)$. The phenotypic covariance:
+
+$$\mathbf{V} = \mathbf{W}^{-1} + \tau^2 \boldsymbol{\Phi}$$
+
+**Key insight (Remark 1):** The IRLS weights are *already embedded* in **V**. The base projection $\mathbf{P}\_0 = \mathbf{V}^{-1} - \mathbf{V}^{-1}\mathbf{X}(\mathbf{X}^\top \mathbf{V}^{-1}\mathbf{X})^{-1}\mathbf{X}^\top \mathbf{V}^{-1}$ operates in the correct heteroscedastic metric without explicit weight injection.
+
+### 2. Epistatic Score Statistic with Generalized FWL (§2.2)
+
+The epistatic kernel is:
+
+$$\mathbf{K}\_{\mathrm{epi}} = (\mathbf{Z}\_A \mathbf{Z}\_A^\top) \odot (\mathbf{Z}\_B \mathbf{Z}\_B^\top)$$
+
+**Proposition 1 (Generalized main-effect immunity).** The FWL projection:
+
+$$\mathbf{P}\_{\mathrm{adj}} = \mathbf{P}\_0 - \mathbf{P}\_0 \mathbf{Z}\_{\mathrm{main}} (\mathbf{Z}\_{\mathrm{main}}^\top \mathbf{P}\_0 \mathbf{Z}\_{\mathrm{main}})^{-1} \mathbf{Z}\_{\mathrm{main}}^\top \mathbf{P}\_0$$
+
+is symmetric, V-metric idempotent, and satisfies $\mathbf{P}\_{\mathrm{adj}} \mathbf{Z}\_{\mathrm{main}} = \mathbf{0}$ exactly.
+
+**Proposition 2 (Dimensionality collapse):**
+
+$$Q\_{\mathrm{adj}} = \frac{1}{2} \left\lVert \mathbf{Z}\_A^\top \mathrm{Diag}(\tilde{\mathbf{y}}) \mathbf{Z}\_B \right\rVert\_F^2$$
+
+This is an $m\_A \times m\_B$ computation — complexity **O(N · mₐ · m_B)**, no N×N matrix formed.
+
+### 3. Dual-Space Deflation-Accelerated Cumulant Extraction (§2.3, Theorem 1)
+
+**Theorem 1 (Symmetric dual-space reduction).** Let $\mathbf{Z}\_{\mathrm{KR}}$ denote the row-wise Khatri-Rao product of $\mathbf{Z}\_A$ and $\mathbf{Z}\_B$. The non-zero eigenvalues of $\mathbf{P}\_{\mathrm{adj}} \mathbf{K}\_{\mathrm{epi}}$ (N×N, asymmetric) are identical to those of:
+
+$$\mathbf{G}\_{\mathrm{dual}} = \mathbf{Z}\_{\mathrm{KR}}^\top \mathbf{P}\_{\mathrm{adj}} \mathbf{Z}\_{\mathrm{KR}}$$
+
+which is $(m\_A m\_B) \times (m\_A m\_B)$, **symmetric positive semi-definite** by construction.
+
+**Algorithm 1 (Hutch++ deflation):**
+1. **Step 1 (Deflation):** Allocate S/3 probes for randomized Nyström low-rank approximation of **G**_dual dominant eigenspace. Compute exact trace contribution.
+2. **Step 2 (Residual):** Apply standard Hutchinson with remaining 2S/3 Rademacher probes to the well-conditioned residual.
+
+Variance reduction: from $O(\|\mathbf{A}\|\_F^2)$ to $O(\|\mathbf{A} - \mathbf{A}\_k\|\_F^2)$ — **quadratic improvement**.
+
+### 4. Saddlepoint Approximation (§2.5)
+
+The CGF from cumulants:
+
+$$K(t) = \sum\_{j=1}^{4} \kappa\_j \frac{t^j}{j!}$$
+
+Newton-Raphson for saddlepoint root $\hat{t}$ solving $K'(\hat{t}) = q$. **Lugannani-Rice tail probability:**
+
+$$P(Q > q) \approx \bar{\Phi}(\hat{w}) + \phi(\hat{w}) \left(\frac{1}{\hat{w}} - \frac{1}{\hat{u}}\right)$$
+
+where $\hat{w} = \mathrm{sign}(\hat{t})\sqrt{2(\hat{t}q - K(\hat{t}))}$ and $\hat{u} = \hat{t}\sqrt{K''(\hat{t})}$. Computed via `erfc()` for exact precision to **P ≈ 10⁻³⁰⁰**.
+
+### 5. Non-Linear Genomic Control (§2.4)
+
+Augmented null model conditioning on background epistatic variance:
+
+$$\mathbf{V}\_{\mathrm{aug}} = \sigma\_e^2 \mathbf{I} + \tau^2 \boldsymbol{\Phi} + \tau\_{\mathrm{epi}}^2 (\boldsymbol{\Phi} \odot \boldsymbol{\Phi})$$
+
+Scalable estimation via:
+- **Stage 1:** GRM sparsification (threshold kinship < 0.05 → 0)
+- **Stage 2:** Randomized Haseman-Elston regression for variance components
+
+### 6. Federated Cumulant Additivity (§2.5, Theorem 2)
+
+**Theorem 2:** For K independent cohorts:
+
+$$\kappa\_{j, \mathrm{meta}} = \sum\_{k=1}^{K} \kappa\_{j,k} \quad \forall j \geq 1$$
+
+**Fed-cSPA-HE Protocol:**
+1. Each node k computes local $(\kappa\_{1,k}, \ldots, \kappa\_{4,k}, Q\_k)$ via Algorithm 1
+2. Encrypt with CKKS homomorphic encryption: $\mathrm{ct}\_k = \mathrm{Enc}(\kappa\_{1,k}, \ldots, Q\_k)$
+3. Aggregator sums ciphertexts: $\mathrm{ct}\_{\mathrm{agg}} = \sum\_k \mathrm{ct}\_k$ (no decryption)
+4. Trusted enclave decrypts and computes SPA p-value
+
+Only **5 encrypted scalars** leave each node — **zero raw genotype leakage**.
+
+---
+
+## Testing
 
 ```bash
-python -m pytest tests/ -v --tb=short
+# Run all 24 mathematical invariant tests
+pip install -e .
+pytest tests/test_math_invariants.py -v
 ```
 
-**Latest results:** 84 passed, 10 skipped, 0 failed (14s)
+### Validated Properties
 
-| Test Module | Tests | Coverage |
-|---|---|---|
-| `test_math_invariants` | 8 | Ground-truth O(N³) vs O(N) validation |
-| `test_federated_spa` | 12 | CGF, Halley, Lugannani-Rice, batch API |
-| `test_saddlepoint_module` | 11 | Package-level SPA with χ²(10) reference |
-| `test_glmm` | 10 | P₀ properties, AI-REML, whitened residual |
-| `test_weighting` | 11 | CADD, AlphaMissense, Beta weighting |
-| `test_security` | 13 | NaN/Inf, overflow, extreme tails, types |
-| `test_zarr_store` | 10 | Zarr I/O lifecycle (skipped if no zarr) |
-| `test_config` | 2 | JAX x64 enforcement + package import |
-| `memory_audit` | 1 | N=1M peak RAM < 5 GB verification |
+| Test | Property | Status |
+|------|----------|--------|
+| Theorem 1 | Dual-space eigenvalue equivalence | ✅ Pass |
+| Theorem 1 | Trace equivalence (primal = dual) | ✅ Pass |
+| Theorem 1 | G_dual is SPSD | ✅ Pass |
+| Proposition 1 | FWL annihilation (continuous) | ✅ Pass |
+| Proposition 1 | V-metric idempotency | ✅ Pass |
+| Proposition 1 | FWL symmetry | ✅ Pass |
+| Proposition 1 | Binary trait FWL annihilation | ✅ Pass |
+| Proposition 2 | Frobenius = quadratic form | ✅ Pass |
+| Algorithm 1 | Hutch++ accuracy vs exact | ✅ Pass |
+| Algorithm 1 | Hutch++ variance reduction | ✅ Pass |
+| Newton's identities | Known eigenvalue spectrum | ✅ Pass |
+| Theorem 2 | First-order trace additivity | ✅ Pass |
+| SPA | Valid p-value range | ✅ Pass |
+| SPA | Monotonicity | ✅ Pass |
+| SPA | Batch consistency | ✅ Pass |
+| NL-GC | GRM sparsification | ✅ Pass |
+| NL-GC | Hadamard square | ✅ Pass |
+| CKKS | Encrypt-decrypt round-trip | ✅ Pass |
+| CKKS | Homomorphic addition | ✅ Pass |
+| Graph search | Candidate generation | ✅ Pass |
+| Graph search | iPTM threshold | ✅ Pass |
+| Memory | No N×N allocation | ✅ Pass |
+| Security | 5-scalar transmission only | ✅ Pass |
+| Security | Context decryption fidelity | ✅ Pass |
 
----
-
-## 📊 Figures
-
-Generate all publication-quality figures:
+## Simulation Experiments (§2.7)
 
 ```bash
-python viz/viz_scalability.py    # Figure 1: Computational scaling
-python viz/viz_calibration.py    # Figure 2: Type I error Q-Q
-python viz/viz_federated.py      # Figure 3: Federated validation
-python viz/viz_network.py        # Figure 4: Epistatic networks
-python viz/viz_3d_synergy.py     # 3D synergistic surface
+python simulations/simulate_biobank.py
 ```
 
----
+### Experimental Configurations
 
-## ⚙️ Tech Stack
+1. **Human semi-empirical (continuous):** 1KGP genotypes, h² = 0.3, 5000 common causal variants
+2. **Binary traits (1:5 to 1:100 imbalance):** Liability threshold model with varying prevalence
+3. **Bovine WGS (extreme kinship):** F_avg = 0.06, 130 breeds (1000 Bull Genomes)
+4. **Federated partitioning:** 5 superpopulations (AFR, AMR, EAS, EUR, SAS)
 
-| Component | Technology | Version |
-|---|---|---|
-| Core compute | JAX (XLA-compiled) | 0.5+ |
-| Precision | `jax_enable_x64 = True` | float64 |
-| Out-of-core I/O | Zarr v3 | 3.0+ |
-| Federated actors | Ray | 2.40+ |
-| Visualization | matplotlib + ggplot2 | — |
-| Package management | uv | 0.5+ |
+### Competing Methods
 
----
-
-## 📄 License
-
-MIT License. See [LICENSE](LICENSE) for details.
+- Standard-EVD: explicit 4th-order trace (O(N³))
+- QuadKAST + Davies: linear but only 2nd-order moments
+- Naive Gaussian: no tail correction
+- IVW fixed-effect meta-analysis
 
 ---
 
-## 📚 Citation
-
-If you use MetaRareEpi in your research, please cite:
+## Citation
 
 ```bibtex
 @article{MetaRareEpi2026,
-  title={Federated exact saddlepoint approximation enables biobank-scale
-         rare-variant epistatic network mapping across species},
-  year={2026},
-  note={In preparation}
+  title   = {Dual-Space Federated Saddlepoint Approximation with
+             Deflation-Accelerated Cumulant Extraction for Biobank-Scale
+             Rare-Variant Epistasis Mapping},
+  author  = {[Authors]},
+  year    = {2026},
+  note    = {Under peer review}
 }
 ```
+
+## License
+
+[MIT License](LICENSE) — see [LICENSE](LICENSE) for details.
+
+## Links
+
+- 📄 [Project Website](https://meibujun.github.io/MetaRareEpi/)
+- 🐛 [Issue Tracker](https://github.com/meibujun/MetaRareEpi/issues)
+- 📧 Contact: [meibujun@github](https://github.com/meibujun)
